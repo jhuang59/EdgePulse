@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  router-benchmark:
+    build: .
+    container_name: router-ping-benchmark
+    network_mode: "host"  # Required to access host network interfaces
+    privileged: true       # Required for ping operations
+    volumes:
+      - ./results:/app/results
+      - ./config.json:/app/config.json:ro
+    restart: unless-stopped
+    environment:
+      - TZ=UTC
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

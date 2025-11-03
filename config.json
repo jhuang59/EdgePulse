@@ -1,0 +1,14 @@
+{
+  "router1": {
+    "gateway": "192.168.1.1",
+    "interface": "enp0s31f6"
+  },
+  "router2": {
+    "gateway": "192.168.30.1",
+    "interface": "enp8s0f0"
+  },
+  "ping_target": "8.8.8.8",
+  "ping_count": 20,
+  "test_interval_seconds": 300,
+  "results_dir": "/app/results"
+}
