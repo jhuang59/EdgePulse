@@ -31,7 +31,8 @@ class PingBenchmark:
         self.results_dir = self.config.get('results_dir', '/app/results')
         self.center_server_url = self.config.get('center_server_url', '')
         self.heartbeat_interval = self.config.get('heartbeat_interval_seconds', 60)
-        self.client_id = self.config.get('client_id', socket.gethostname())
+        # Use hostname if client_id is empty or not specified
+        self.client_id = self.config.get('client_id') or socket.gethostname()
 
         # Heartbeat thread control
         self.heartbeat_running = False
