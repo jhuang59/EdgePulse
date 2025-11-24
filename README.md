@@ -1,6 +1,7 @@
 # Router Benchmark
 
 A distributed system for benchmarking router performance across multiple locations with centralized visualization.
+![img_v3_02sb_e11c695f-972b-42df-aeec-1226729d3deg](https://github.com/user-attachments/assets/158a64e6-0030-4b34-98a3-5e18c2688ce7)
 
 ## Architecture
 
@@ -66,11 +67,15 @@ docker-compose up -d
 - Configurable test intervals and ping counts
 - Local result storage (JSON format)
 - Automatic log forwarding to center server
+- Heartbeat/keepalive signals to track client status
 - Detailed latency statistics (min, max, avg, median, stdev)
 - Packet loss tracking
 
 ### Server Features
 - REST API for log collection
+- Client monitoring with heartbeat tracking
+- Active clients list showing online/offline status
+- **Per-client data filtering**: View specific client or all clients
 - Web-based dashboard
 - Real-time visualization with Chart.js
 - Time-series charts for packet loss and latency
@@ -121,9 +126,15 @@ docker-compose up -d
   "ping_count": 20,
   "test_interval_seconds": 300,
   "results_dir": "/app/results",
-  "center_server_url": "http://CENTER_SERVER_IP:5000"
+  "center_server_url": "http://CENTER_SERVER_IP:5000",
+  "heartbeat_interval_seconds": 60,
+  "client_id": ""
 }
 ```
+
+**Parameters:**
+- `heartbeat_interval_seconds`: How often to send heartbeat to center server (adjustable, default: 60)
+- `client_id`: Unique identifier for this client (optional, defaults to hostname)
 
 ## Requirements
 
