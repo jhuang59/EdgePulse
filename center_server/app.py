@@ -14,7 +14,7 @@ app = Flask(__name__)
 
 # Data directory
 DATA_DIR = Path('/app/data')
-DATA_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = DATA_DIR / 'benchmark_data.jsonl'
 CLIENTS_FILE = DATA_DIR / 'clients.json'
 
