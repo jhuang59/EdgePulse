@@ -8,6 +8,9 @@ WORKDIR /app
 
 # Copy application files
 COPY app.py /app/
+COPY auth.py /app/
+COPY commands.py /app/
+COPY command_whitelist.json /app/
 COPY templates /app/templates/
 
 # Create data directory
