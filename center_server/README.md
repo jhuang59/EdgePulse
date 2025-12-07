@@ -1,6 +1,6 @@
 # Router Benchmark Center Server
 
-A simple web-based dashboard for collecting and visualizing router benchmark logs from multiple client nodes.
+A web-based dashboard for collecting and visualizing router benchmark logs from multiple client nodes, with secure remote command execution capabilities.
 
 ## Features
 
@@ -8,10 +8,11 @@ A simple web-based dashboard for collecting and visualizing router benchmark log
 - **Client Monitoring**: Track active clients with heartbeat/keepalive mechanism
 - **Per-Client Filtering**: View data from specific client or all clients combined
 - **Real-time Visualization**: Interactive charts showing packet loss % and latency over time
-- **Client List**: View all connected clients with online/offline status
-- **Simple Dashboard**: Clean web UI with stats cards and time-series charts
+- **Remote Command Execution**: Send whitelisted commands to clients with mutual authentication
+- **Admin Authentication**: API key-based admin access
+- **Audit Logging**: Complete audit trail of all command activity
 - **Docker Deployment**: Easy deployment using Docker Compose
-- **Persistent Storage**: Data stored in JSONL format with client identification
+- **Persistent Storage**: Data stored in JSONL format
 
 ## Quick Start
 
@@ -24,172 +25,362 @@ docker-compose up -d
 
 The server will be available at `http://localhost:5000`
 
-### 2. Configure Clients
+### 2. Initialize Admin Account
+
+```bash
+curl -X POST http://localhost:5000/api/admin/init \
+  -H "Content-Type: application/json" \
+  -d '{"admin_name": "admin"}'
+```
+
+**Important:** Save the `api_key` returned - it cannot be retrieved later!
+
+### 3. Register Clients
+
+```bash
+curl -X POST http://localhost:5000/api/clients/register \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-API-Key: YOUR_ADMIN_API_KEY" \
+  -d '{"client_id": "benchmark-client-1"}'
+```
+
+**Important:** Save the `secret_key` returned - configure this on the client!
+
+### 4. Configure Clients
 
 Update the `config.json` on each benchmark client:
 
 ```json
 {
-  ...
-  "center_server_url": "http://YOUR_SERVER_IP:5000"
+  "center_server_url": "http://YOUR_SERVER_IP:5000",
+  "client_id": "benchmark-client-1",
+  "secret_key": "SECRET_KEY_FROM_REGISTRATION",
+  "remote_commands_enabled": true,
+  "command_poll_interval_seconds": 10
 }
 ```
 
-Replace `YOUR_SERVER_IP` with the actual IP address of the server running the center server.
-
-### 3. Access Dashboard
+### 5. Access Dashboard
 
 Open your browser and navigate to:
 ```
 http://YOUR_SERVER_IP:5000
 ```
 
-You'll see:
-- Live statistics for both routers
-- Active clients list with online/offline status
-- Client filter dropdown to view specific client or all clients
-- Packet loss % over time chart (per-client or aggregated)
-- Average latency over time chart (per-client or aggregated)
-- Auto-refresh every 30 seconds
+The dashboard has two tabs:
+- **Monitoring**: Charts, statistics, and client status
+- **Remote Commands**: Send commands and view results
 
-### 4. Filter by Client (Optional)
+## API Reference
 
-Use the "View Client" dropdown to:
-- View **All Clients**: See aggregated data from all clients
-- View **Specific Client**: Filter to show only one client's performance data
+### Monitoring Endpoints
 
-Charts automatically update to show selected client's data.
-
-## API Endpoints
-
-### POST /api/logs
+#### POST /api/logs
 Receive benchmark logs from clients
 
 **Request Body:**
 ```json
 {
-  "timestamp": "2025-11-03T10:00:00",
+  "timestamp": "2025-12-07T10:00:00",
+  "client_id": "client-001",
   "router1": {
     "router": "Router 1",
     "packet_loss_pct": 0.0,
-    "avg_ms": 15.5,
-    ...
+    "avg_ms": 15.5
   },
   "router2": {
     "router": "Router 2",
     "packet_loss_pct": 0.0,
-    "avg_ms": 18.2,
-    ...
+    "avg_ms": 18.2
   }
 }
 ```
 
-**Response:**
-```json
-{
-  "status": "success",
-  "message": "Log received"
-}
-```
-
-### GET /api/data
+#### GET /api/data
 Get benchmark data for visualization
 
 **Query Parameters:**
-- `limit` (optional): Number of recent records to return (default: 100)
-- `client_id` (optional): Filter by specific client (default: all clients)
+- `limit` (optional): Number of recent records (default: 100)
+- `client_id` (optional): Filter by specific client
 
-**Response:**
-```json
-{
-  "data": [...],
-  "total": 150
-}
-```
-
-**Examples:**
-- All clients: `GET /api/data?limit=100`
-- Specific client: `GET /api/data?limit=100&client_id=office-client-1`
-
-### GET /api/stats
+#### GET /api/stats
 Get summary statistics
 
 **Query Parameters:**
-- `client_id` (optional): Filter by specific client (default: all clients)
+- `client_id` (optional): Filter by specific client
 
-**Response:**
-```json
-{
-  "stats": {
-    "total_records": 150,
-    "latest_timestamp": "2025-11-03T10:00:00",
-    "client_id": "office-client-1",
-    "hostname": "benchmark-host-1",
-    "router1_latest_loss": 0.0,
-    "router2_latest_loss": 0.0,
-    "router1_latest_avg_ms": 15.5,
-    "router2_latest_avg_ms": 18.2
-  }
-}
-```
-
-### POST /api/heartbeat
-Receive heartbeat/keepalive from clients
+#### POST /api/heartbeat
+Receive heartbeat from clients
 
 **Request Body:**
 ```json
 {
   "client_id": "client-001",
   "hostname": "benchmark-host-1",
-  "router1_interface": "enp0s31f6",
-  "router2_interface": "enp8s0f0"
+  "router1_interface": "eth0",
+  "router2_interface": "eth1"
 }
+```
+
+#### GET /api/clients
+Get list of clients with their status
+
+**Query Parameters:**
+- `timeout` (optional): Seconds to consider client offline (default: 120)
+
+#### GET /health
+Health check endpoint
+
+---
+
+### Admin Management Endpoints
+
+#### POST /api/admin/init
+Initialize the first admin account (only works once)
+
+**Request Body:**
+```json
+{"admin_name": "admin"}
 ```
 
 **Response:**
 ```json
 {
   "status": "success",
-  "message": "Heartbeat received"
+  "api_key": "YOUR_ADMIN_API_KEY",
+  "admin_name": "admin"
 }
 ```
 
-### GET /api/clients
-Get list of active clients with their status
+#### POST /api/admin/create
+Create additional admin accounts (requires admin auth)
 
-**Query Parameters:**
-- `timeout` (optional): Seconds to consider client offline (default: 120)
+**Headers:** `X-Admin-API-Key: YOUR_ADMIN_KEY`
+
+**Request Body:**
+```json
+{"admin_name": "admin2"}
+```
+
+---
+
+### Client Registration Endpoints
+
+#### POST /api/clients/register
+Register a new client (requires admin auth)
+
+**Headers:** `X-Admin-API-Key: YOUR_ADMIN_KEY`
+
+**Request Body:**
+```json
+{"client_id": "my-client"}
+```
 
 **Response:**
 ```json
 {
-  "clients": [
-    {
-      "client_id": "client-001",
-      "hostname": "benchmark-host-1",
-      "last_heartbeat": "2025-11-03T10:00:00",
-      "seconds_since_heartbeat": 15,
-      "status": "online",
-      "router1_interface": "enp0s31f6",
-      "router2_interface": "enp8s0f0"
-    }
-  ],
-  "total": 1,
-  "online": 1,
-  "offline": 0
+  "status": "success",
+  "client_id": "my-client",
+  "secret_key": "CLIENT_SECRET_KEY"
 }
 ```
 
-### GET /health
-Health check endpoint
+#### GET /api/clients/registered
+List all registered clients (requires admin auth)
+
+**Headers:** `X-Admin-API-Key: YOUR_ADMIN_KEY`
+
+#### POST /api/clients/{client_id}/revoke
+Revoke a client's access (requires admin auth)
+
+**Headers:** `X-Admin-API-Key: YOUR_ADMIN_KEY`
+
+---
+
+### Command Execution Endpoints
+
+#### GET /api/commands/whitelist
+Get list of available whitelisted commands (no auth required)
+
+**Response:**
+```json
+{
+  "commands": [
+    {
+      "id": "system_info",
+      "description": "Get system kernel and OS info",
+      "category": "system",
+      "params": [],
+      "timeout": 10
+    }
+  ],
+  "total": 22
+}
+```
+
+#### POST /api/commands/send
+Queue a command for a client (requires admin auth)
+
+**Headers:** `X-Admin-API-Key: YOUR_ADMIN_KEY`
+
+**Request Body:**
+```json
+{
+  "client_id": "benchmark-client-1",
+  "command_id": "system_info",
+  "params": {}
+}
+```
+
+For commands with parameters:
+```json
+{
+  "client_id": "benchmark-client-1",
+  "command_id": "ping_test",
+  "params": {
+    "target": "8.8.8.8",
+    "count": "4"
+  }
+}
+```
+
+#### GET /api/commands/pending/{client_id}
+View pending commands for a client (requires admin auth)
+
+**Headers:** `X-Admin-API-Key: YOUR_ADMIN_KEY`
+
+#### POST /api/commands/pending/{client_id}/clear
+Clear all pending commands for a client (requires admin auth)
+
+**Headers:** `X-Admin-API-Key: YOUR_ADMIN_KEY`
+
+#### GET /api/commands/poll
+Client polls for pending commands (requires client auth)
+
+**Headers:**
+- `X-Client-ID: client-id`
+- `X-Client-API-Key: secret-key`
+
+#### POST /api/commands/result
+Client submits command execution result (requires client auth)
+
+**Headers:**
+- `X-Client-ID: client-id`
+- `X-Client-API-Key: secret-key`
+
+**Request Body:**
+```json
+{
+  "command_uuid": "...",
+  "command_id": "system_info",
+  "exit_code": 0,
+  "stdout": "Linux hostname 5.4.0 ...",
+  "stderr": "",
+  "executed_at": "2025-12-07T10:00:00",
+  "duration_seconds": 0.05
+}
+```
+
+#### GET /api/commands/results
+Get command execution results (requires admin auth)
+
+**Headers:** `X-Admin-API-Key: YOUR_ADMIN_KEY`
+
+**Query Parameters:**
+- `client_id` (optional): Filter by client
+- `limit` (optional): Max results (default: 100)
+
+#### GET /api/commands/results/{command_uuid}
+Get specific command result by UUID (requires admin auth)
+
+**Headers:** `X-Admin-API-Key: YOUR_ADMIN_KEY`
+
+#### GET /api/commands/audit
+Get command audit log (requires admin auth)
+
+**Headers:** `X-Admin-API-Key: YOUR_ADMIN_KEY`
+
+**Query Parameters:**
+- `limit` (optional): Max entries (default: 100)
+
+---
+
+## Available Commands
+
+The whitelist includes these pre-approved commands:
+
+### System Commands
+| ID | Description |
+|----|-------------|
+| `system_info` | Get system kernel and OS info |
+| `hostname` | Get machine hostname |
+| `uptime` | Show system uptime and load |
+| `disk_usage` | Show disk usage |
+| `memory_info` | Show memory usage |
+| `cpu_info` | Show CPU information |
+| `process_list` | Top 20 processes by memory |
+| `date_time` | Current date/time/timezone |
+
+### Network Commands
+| ID | Description | Parameters |
+|----|-------------|------------|
+| `network_interfaces` | List network interfaces | - |
+| `routing_table` | Show routing table | - |
+| `dns_config` | Show DNS configuration | - |
+| `network_stats` | Network statistics | - |
+| `ping_test` | Ping a host | `target` (IP), `count` (1-10) |
+| `traceroute` | Trace route to host | `target` (IP) |
+| `interface_stats` | Stats for interface | `interface` (name) |
+| `connection_count` | Socket statistics | - |
+| `arp_table` | Show ARP table | - |
+
+### Docker Commands
+| ID | Description |
+|----|-------------|
+| `docker_ps` | List running containers |
+| `docker_stats` | Container resource usage |
+
+### Benchmark Commands
+| ID | Description |
+|----|-------------|
+| `benchmark_status` | Check if benchmark running |
+| `benchmark_logs` | Show last 50 log lines |
+
+See [REMOTE_COMMANDS_README.md](REMOTE_COMMANDS_README.md) for complete documentation.
+
+---
 
 ## Data Storage
 
-Data is stored in the `/app/data/` directory (inside the container):
-- **benchmark_data.jsonl**: All benchmark results (one JSON object per line)
-- **clients.json**: Registry of all clients and their last heartbeat times
+Data is stored in the `/app/data/` directory:
 
-On the host, this maps to `./data/` (relative to center_server directory).
+| File | Description |
+|------|-------------|
+| `benchmark_data.jsonl` | All benchmark results |
+| `clients.json` | Client heartbeat registry |
+| `admin_secrets.json` | Admin API keys (protected) |
+| `client_secrets.json` | Client secret keys (protected) |
+| `pending_commands.json` | Queued commands |
+| `command_results.jsonl` | Execution results |
+| `command_audit.jsonl` | Audit log |
+| `used_nonces.json` | Replay prevention |
+
+---
+
+## Dashboard Features
+
+### Monitoring Tab
+- **Statistics Cards**: Total records, packet loss, latency (color-coded)
+- **Active Clients Table**: Online/offline status, interfaces, last seen
+- **Charts**: Packet loss and latency over time
+- **Controls**: Client filter, time range selector, refresh button
+
+### Remote Commands Tab
+- **Admin Authentication**: Enter and save your admin API key
+- **Send Command**: Select client, command, and parameters
+- **Command Results**: Table of recent results with "View" button for details
+
+---
 
 ## Managing the Server
 
@@ -208,71 +399,49 @@ docker-compose down
 docker-compose restart
 ```
 
+### Rebuild after code changes
+```bash
+docker-compose down
+docker-compose up -d --build
+```
+
 ### Clear all data
 ```bash
-rm -f data/benchmark_data.jsonl
+rm -rf data/*
 docker-compose restart
 ```
 
-## Dashboard Features
-
-### Statistics Cards
-- Total records collected
-- Latest packet loss % for each router (color-coded: green = 0%, yellow < 5%, red ≥ 5%)
-- Latest average latency for each router (color-coded: green < 50ms, yellow < 100ms, red ≥ 100ms)
-
-### Active Clients
-- Table showing all clients that have sent heartbeats
-- Client ID, hostname, and network interfaces
-- Online/offline status with color coding
-- Last seen time (e.g., "15s ago", "5m ago")
-- Clients are marked offline after 2 minutes without heartbeat
-
-### Charts
-- **Packet Loss Over Time**: Line chart showing loss % for both routers
-- **Latency Over Time**: Line chart showing average latency for both routers
-
-### Controls
-- **Client Filter**: Dropdown to view specific client or all clients
-  - Select "All Clients" to see aggregated data
-  - Select specific client to see only that client's data
-  - Charts and stats update automatically when selection changes
-- **Time Range**: Selector for number of records (Last 50/100/200/500 records)
-- **Manual Refresh**: Button to update dashboard immediately
-- **Auto-refresh**: Updates every 30 seconds automatically
+---
 
 ## Network Configuration
 
-The server listens on port 5000. Make sure:
+The server listens on port 5000. Ensure:
 1. Port 5000 is open in your firewall
 2. Clients can reach the server IP on port 5000
-3. If using cloud hosting, ensure security groups allow inbound traffic on port 5000
+3. For cloud hosting, allow inbound traffic on port 5000
 
-## Extending the Server
-
-This is designed to be simple and extensible. Future enhancements could include:
-
-- Database backend (PostgreSQL, InfluxDB)
-- Authentication and multi-tenancy
-- Alerting when packet loss exceeds threshold
-- Historical data analysis and trends
-- Export data as CSV
-- Comparison views and reports
+---
 
 ## Troubleshooting
 
 ### Clients can't connect
 - Check firewall rules
-- Verify server IP is correct in client config
+- Verify server IP in client config
 - Check server is running: `docker-compose ps`
 - Check server logs: `docker-compose logs`
 
+### Authentication errors
+- Verify admin API key is correct
+- Verify client secret_key matches registration
+- Check if client was revoked
+
+### Commands not executing
+- Verify client has `remote_commands_enabled: true`
+- Verify client has correct `secret_key`
+- Check client logs for signature verification errors
+- Ensure server and client clocks are synchronized
+
 ### No data showing in dashboard
-- Verify clients are sending data (check client logs)
+- Verify clients are sending data
 - Check server received data: `cat data/benchmark_data.jsonl`
 - Check browser console for errors
-
-### Charts not updating
-- Check browser console for errors
-- Verify API endpoints work: `curl http://localhost:5000/api/stats`
-- Hard refresh browser (Ctrl+F5)
