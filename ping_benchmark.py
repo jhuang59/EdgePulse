@@ -3,6 +3,7 @@
 Router Ping Benchmark Tool
 Pings internet through two different routers and summarizes performance
 Includes remote command execution with mutual authentication
+Includes web shell for remote terminal access
 """
 
 import subprocess
@@ -18,6 +19,20 @@ import threading
 import socket
 import hmac
 import hashlib
+import pty
+import select
+import struct
+import fcntl
+import termios
+import signal
+
+# Try to import socketio for web shell
+try:
+    import socketio
+    SOCKETIO_AVAILABLE = True
+except ImportError:
+    SOCKETIO_AVAILABLE = False
+    print("Warning: python-socketio not installed, web shell disabled")
 
 class PingBenchmark:
     def __init__(self, config_file='config.json'):
@@ -51,6 +66,12 @@ class PingBenchmark:
         self.command_polling_thread = None
         self.used_nonces = set()  # Track used nonces to prevent replay attacks
         self.nonce_cleanup_time = datetime.now()
+
+        # Web shell settings
+        self.shell_enabled = self.config.get('web_shell_enabled', True)
+        self.shell_connected = False
+        self.sio = None
+        self.shell_sessions = {}  # session_id -> {'fd': master_fd, 'pid': pid}
 
         # Create results directory
         os.makedirs(self.results_dir, exist_ok=True)
@@ -600,6 +621,285 @@ class PingBenchmark:
             if self.command_polling_thread:
                 self.command_polling_thread.join(timeout=2)
 
+    # =========================================================================
+    # Web Shell (via WebSocket)
+    # =========================================================================
+
+    def start_shell_client(self):
+        """Start the WebSocket shell client"""
+        if not SOCKETIO_AVAILABLE:
+            print("Web shell disabled: python-socketio not installed")
+            return
+
+        if not self.center_server_url:
+            print("Web shell disabled: no center server configured")
+            return
+
+        if not self.secret_key:
+            print("Web shell disabled: no secret key configured")
+            return
+
+        if not self.shell_enabled:
+            print("Web shell disabled in config")
+            return
+
+        # Create Socket.IO client
+        self.sio = socketio.Client(reconnection=True, reconnection_attempts=0)
+
+        # Set up event handlers
+        @self.sio.event
+        def connect():
+            print(f"[WebSocket] Connected to server for shell")
+            self.shell_connected = True
+            # Register for shell capability
+            self.sio.emit('shell_register_client', {
+                'client_id': self.client_id,
+                'api_key': self.secret_key
+            })
+
+        @self.sio.event
+        def disconnect():
+            print(f"[WebSocket] Disconnected from server")
+            self.shell_connected = False
+            # Close all shell sessions
+            for session_id in list(self.shell_sessions.keys()):
+                self._close_shell_session(session_id)
+
+        @self.sio.on('shell_registered')
+        def on_shell_registered(data):
+            print(f"[WebSocket] Shell registered: {data.get('client_id')}")
+
+        @self.sio.on('shell_error')
+        def on_shell_error(data):
+            print(f"[WebSocket] Shell error: {data.get('error')}")
+
+        @self.sio.on('shell_open')
+        def on_shell_open(data):
+            session_id = data.get('session_id')
+            rows = data.get('rows', 24)
+            cols = data.get('cols', 80)
+            print(f"[WebSocket] Shell open request: {session_id[:8]}...")
+            self._open_shell_session(session_id, rows, cols)
+
+        @self.sio.on('shell_input')
+        def on_shell_input(data):
+            session_id = data.get('session_id')
+            input_data = data.get('input', '')
+            self._handle_shell_input(session_id, input_data)
+
+        @self.sio.on('shell_resize')
+        def on_shell_resize(data):
+            session_id = data.get('session_id')
+            rows = data.get('rows', 24)
+            cols = data.get('cols', 80)
+            self._resize_shell(session_id, rows, cols)
+
+        @self.sio.on('shell_close')
+        def on_shell_close(data):
+            session_id = data.get('session_id')
+            print(f"[WebSocket] Shell close request: {session_id[:8]}...")
+            self._close_shell_session(session_id)
+
+        # Connect to server
+        try:
+            # Convert http:// to ws:// for WebSocket
+            ws_url = self.center_server_url.replace('http://', 'ws://').replace('https://', 'wss://')
+            # But socketio client uses http/https
+            self.sio.connect(self.center_server_url, transports=['websocket'])
+            print(f"[WebSocket] Shell client started")
+        except Exception as e:
+            print(f"[WebSocket] Failed to connect: {e}")
+            self.sio = None
+
+    def stop_shell_client(self):
+        """Stop the WebSocket shell client"""
+        if self.sio:
+            try:
+                # Close all shell sessions
+                for session_id in list(self.shell_sessions.keys()):
+                    self._close_shell_session(session_id)
+                self.sio.disconnect()
+            except Exception as e:
+                print(f"[WebSocket] Error disconnecting: {e}")
+            self.sio = None
+            self.shell_connected = False
+
+    def _open_shell_session(self, session_id, rows, cols):
+        """Open a new shell session"""
+        try:
+            # Fork a PTY
+            pid, fd = pty.fork()
+
+            if pid == 0:
+                # Child process - exec shell
+                env = os.environ.copy()
+                env['TERM'] = 'xterm-256color'
+                env['COLUMNS'] = str(cols)
+                env['LINES'] = str(rows)
+
+                # Try to get the user's shell, fallback to /bin/bash
+                shell = os.environ.get('SHELL', '/bin/bash')
+                if not os.path.exists(shell):
+                    shell = '/bin/bash'
+                if not os.path.exists(shell):
+                    shell = '/bin/sh'
+
+                os.execvpe(shell, [shell, '-l'], env)
+            else:
+                # Parent process
+                # Set non-blocking
+                flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+                fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+                # Set terminal size
+                self._set_pty_size(fd, rows, cols)
+
+                # Store session info
+                self.shell_sessions[session_id] = {
+                    'fd': fd,
+                    'pid': pid,
+                    'rows': rows,
+                    'cols': cols
+                }
+
+                # Notify server that shell is ready
+                self.sio.emit('shell_ready', {
+                    'session_id': session_id,
+                    'client_id': self.client_id
+                })
+
+                # Start reading thread for this session
+                read_thread = threading.Thread(
+                    target=self._shell_read_worker,
+                    args=(session_id,),
+                    daemon=True
+                )
+                read_thread.start()
+
+                print(f"[Shell] Session started: {session_id[:8]}... (pid={pid})")
+
+        except Exception as e:
+            print(f"[Shell] Failed to open session: {e}")
+            self.sio.emit('shell_client_exit', {
+                'session_id': session_id,
+                'exit_code': -1
+            })
+
+    def _shell_read_worker(self, session_id):
+        """Background thread to read from shell and send output"""
+        session = self.shell_sessions.get(session_id)
+        if not session:
+            return
+
+        fd = session['fd']
+        pid = session['pid']
+
+        try:
+            while session_id in self.shell_sessions:
+                # Check if process is still alive
+                try:
+                    wpid, status = os.waitpid(pid, os.WNOHANG)
+                    if wpid != 0:
+                        # Process exited
+                        exit_code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
+                        print(f"[Shell] Process exited: {session_id[:8]}... (code={exit_code})")
+                        if self.sio and self.shell_connected:
+                            self.sio.emit('shell_client_exit', {
+                                'session_id': session_id,
+                                'exit_code': exit_code
+                            })
+                        self._close_shell_session(session_id)
+                        return
+                except ChildProcessError:
+                    # Process already reaped
+                    self._close_shell_session(session_id)
+                    return
+
+                # Read from PTY
+                try:
+                    ready, _, _ = select.select([fd], [], [], 0.1)
+                    if ready:
+                        data = os.read(fd, 4096)
+                        if data:
+                            if self.sio and self.shell_connected:
+                                # Send as base64 to handle binary data
+                                import base64
+                                self.sio.emit('shell_output', {
+                                    'session_id': session_id,
+                                    'output': base64.b64encode(data).decode('ascii')
+                                })
+                except OSError:
+                    # FD closed
+                    break
+
+        except Exception as e:
+            print(f"[Shell] Read worker error: {e}")
+        finally:
+            self._close_shell_session(session_id)
+
+    def _handle_shell_input(self, session_id, input_data):
+        """Handle input from admin, write to shell"""
+        session = self.shell_sessions.get(session_id)
+        if not session:
+            return
+
+        try:
+            # Decode from base64
+            import base64
+            data = base64.b64decode(input_data)
+            os.write(session['fd'], data)
+        except Exception as e:
+            print(f"[Shell] Write error: {e}")
+
+    def _resize_shell(self, session_id, rows, cols):
+        """Resize the shell terminal"""
+        session = self.shell_sessions.get(session_id)
+        if not session:
+            return
+
+        session['rows'] = rows
+        session['cols'] = cols
+        self._set_pty_size(session['fd'], rows, cols)
+
+    def _set_pty_size(self, fd, rows, cols):
+        """Set PTY window size"""
+        try:
+            winsize = struct.pack('HHHH', rows, cols, 0, 0)
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
+        except Exception as e:
+            print(f"[Shell] Failed to set PTY size: {e}")
+
+    def _close_shell_session(self, session_id):
+        """Close a shell session"""
+        session = self.shell_sessions.pop(session_id, None)
+        if not session:
+            return
+
+        try:
+            # Close FD
+            os.close(session['fd'])
+        except:
+            pass
+
+        try:
+            # Kill process
+            os.kill(session['pid'], signal.SIGTERM)
+            # Give it a moment, then force kill
+            time.sleep(0.1)
+            try:
+                os.kill(session['pid'], signal.SIGKILL)
+            except:
+                pass
+            # Reap the process
+            try:
+                os.waitpid(session['pid'], os.WNOHANG)
+            except:
+                pass
+        except:
+            pass
+
+        print(f"[Shell] Session closed: {session_id[:8]}...")
+
     def run_continuous(self):
         """Run benchmark continuously at specified interval"""
         print(f"Starting continuous benchmarking...")
@@ -611,6 +911,10 @@ class PingBenchmark:
             print(f"Remote commands: ENABLED (poll interval: {self.command_poll_interval}s)")
         else:
             print(f"Remote commands: DISABLED")
+        if self.secret_key and self.shell_enabled and SOCKETIO_AVAILABLE:
+            print(f"Web shell: ENABLED")
+        else:
+            print(f"Web shell: DISABLED")
         print(f"Press Ctrl+C to stop\n")
 
         # Start heartbeat in background
@@ -619,6 +923,10 @@ class PingBenchmark:
         # Start command polling in background
         self.start_command_polling()
 
+        # Start shell client in background
+        shell_thread = threading.Thread(target=self.start_shell_client, daemon=True)
+        shell_thread.start()
+
         try:
             while True:
                 self.run_benchmark()
@@ -626,6 +934,7 @@ class PingBenchmark:
                 time.sleep(self.test_interval)
         except KeyboardInterrupt:
             print("\n\nBenchmarking stopped by user")
+            self.stop_shell_client()
             self.stop_command_polling()
             self.stop_heartbeat()
 
