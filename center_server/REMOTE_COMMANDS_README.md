@@ -1,6 +1,16 @@
-# Remote Command Execution
+# EdgePulse Remote Commands Guide
 
-This feature allows the center server to send commands to client machines for remote execution. Commands are executed securely with API key authentication and are restricted to a whitelist of safe commands.
+Execute pre-approved commands on remote edge devices through the EdgePulse dashboard or API.
+
+## Overview
+
+The remote command system allows administrators to:
+- Run diagnostic commands on edge devices
+- Execute network troubleshooting tools
+- Check system status and health
+- View Docker container information
+
+All commands are restricted to a pre-approved whitelist for security.
 
 ## Security Architecture
 

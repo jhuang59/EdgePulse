@@ -1,11 +1,11 @@
 {
   "router1": {
     "gateway": "192.168.1.1",
-    "interface": "enp0s31f6"
+    "interface": "eth0"
   },
   "router2": {
     "gateway": "192.168.30.1",
-    "interface": "enp8s0f0"
+    "interface": "wlan0"
   },
   "ping_target": "8.8.8.8",
   "ping_count": 20,
@@ -14,8 +14,8 @@
   "center_server_url": "http://CENTER_SERVER_IP:5000",
   "heartbeat_interval_seconds": 60,
   "client_id": "",
-
   "secret_key": "",
   "remote_commands_enabled": true,
-  "command_poll_interval_seconds": 10
+  "command_poll_interval_seconds": 10,
+  "web_shell_enabled": true
 }
