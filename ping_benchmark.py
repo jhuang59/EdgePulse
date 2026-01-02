@@ -2,8 +2,7 @@
 """
 Router Ping Benchmark Tool
 Pings internet through two different routers and summarizes performance
-Includes remote command execution with mutual authentication
-Includes web shell for remote terminal access
+Includes remote command execution and web shell for remote terminal access
 """
 
 import subprocess
@@ -17,8 +16,6 @@ import urllib.request
 import urllib.error
 import threading
 import socket
-import hmac
-import hashlib
 import pty
 import select
 import struct
@@ -64,8 +61,6 @@ class PingBenchmark:
         # Command polling thread control
         self.command_polling_running = False
         self.command_polling_thread = None
-        self.used_nonces = set()  # Track used nonces to prevent replay attacks
-        self.nonce_cleanup_time = datetime.now()
 
         # Web shell settings
         self.shell_enabled = self.config.get('web_shell_enabled', True)
@@ -365,67 +360,8 @@ class PingBenchmark:
                 self.heartbeat_thread.join(timeout=2)
 
     # =========================================================================
-    # Remote Command Execution (with mutual authentication)
+    # Remote Command Execution (simplified auth - API key only)
     # =========================================================================
-
-    def verify_command_signature(self, command_data):
-        """
-        Verify a command's HMAC signature and check for replay attacks
-        Returns (is_valid, error_message)
-        """
-        if not self.secret_key:
-            return False, "No secret key configured"
-
-        # Check required fields
-        required_fields = ['timestamp', 'nonce', 'signature']
-        for field in required_fields:
-            if field not in command_data:
-                return False, f"Missing required field: {field}"
-
-        # Extract signature
-        signature = command_data.get('signature')
-
-        # Create a copy without signature for verification
-        payload = {k: v for k, v in command_data.items() if k != 'signature'}
-
-        # Canonicalize and compute expected signature
-        canonical = json.dumps(payload, sort_keys=True, separators=(',', ':'))
-        expected_signature = hmac.new(
-            self.secret_key.encode('utf-8'),
-            canonical.encode('utf-8'),
-            hashlib.sha256
-        ).hexdigest()
-
-        # Verify signature
-        if not hmac.compare_digest(signature, expected_signature):
-            return False, "Invalid signature - command rejected"
-
-        # Check timestamp (prevent replay of old commands)
-        try:
-            cmd_time = datetime.fromisoformat(command_data['timestamp'])
-            now = datetime.now()
-            time_diff = abs((now - cmd_time).total_seconds())
-
-            if time_diff > 300:  # 5 minutes tolerance
-                return False, f"Command expired (timestamp too old: {time_diff:.0f}s)"
-        except ValueError as e:
-            return False, f"Invalid timestamp format: {e}"
-
-        # Check nonce (prevent replay attacks)
-        nonce = command_data['nonce']
-
-        # Clean up old nonces periodically
-        if (datetime.now() - self.nonce_cleanup_time).total_seconds() > 600:
-            self.used_nonces.clear()
-            self.nonce_cleanup_time = datetime.now()
-
-        if nonce in self.used_nonces:
-            return False, "Nonce already used (replay attack detected)"
-
-        # Mark nonce as used
-        self.used_nonces.add(nonce)
-
-        return True, "Valid"
 
     def execute_command(self, command_data):
         """
@@ -559,30 +495,13 @@ class PingBenchmark:
                 command = self.poll_for_commands()
 
                 if command:
-                    # Verify signature before execution
-                    is_valid, error_msg = self.verify_command_signature(command)
+                    # Execute the command (simplified auth - no signature verification)
+                    result = self.execute_command(command)
 
-                    if is_valid:
-                        # Execute the command
-                        result = self.execute_command(command)
+                    # Submit result
+                    self.submit_command_result(result)
 
-                        # Submit result
-                        self.submit_command_result(result)
-
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] Command completed: exit_code={result['exit_code']}")
-                    else:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] Command REJECTED: {error_msg}")
-                        # Submit rejection result
-                        self.submit_command_result({
-                            'command_uuid': command.get('command_uuid', 'unknown'),
-                            'command_id': command.get('command_id', 'unknown'),
-                            'exit_code': -1,
-                            'stdout': '',
-                            'stderr': f'Command rejected: {error_msg}',
-                            'executed_at': datetime.now().isoformat(),
-                            'duration_seconds': 0,
-                            'error': 'signature_verification_failed'
-                        })
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Command completed: exit_code={result['exit_code']}")
 
             except Exception as e:
                 print(f"Warning: Error in command polling: {e}")

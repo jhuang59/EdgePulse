@@ -8,7 +8,7 @@ A web-based dashboard for collecting and visualizing router benchmark logs from 
 - **Client Monitoring**: Track active clients with heartbeat/keepalive mechanism
 - **Per-Client Filtering**: View data from specific client or all clients combined
 - **Real-time Visualization**: Interactive charts showing packet loss % and latency over time
-- **Remote Command Execution**: Send whitelisted commands to clients with mutual authentication
+- **Remote Command Execution**: Send whitelisted commands to clients with API key authentication
 - **Web Shell**: Real-time interactive terminal access to clients via WebSocket
 - **Admin Authentication**: API key-based admin access
 - **Audit Logging**: Complete audit trail of all command activity
@@ -462,8 +462,7 @@ The server listens on port 5000. Ensure:
 ### Commands not executing
 - Verify client has `remote_commands_enabled: true`
 - Verify client has correct `secret_key`
-- Check client logs for signature verification errors
-- Ensure server and client clocks are synchronized
+- Check client logs for authentication errors
 
 ### No data showing in dashboard
 - Verify clients are sending data

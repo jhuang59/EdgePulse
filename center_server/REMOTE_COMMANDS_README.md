@@ -1,36 +1,33 @@
 # Remote Command Execution
 
-This feature allows the center server to send commands to client machines for remote execution. Commands are executed securely with mutual authentication and are restricted to a whitelist of safe commands.
+This feature allows the center server to send commands to client machines for remote execution. Commands are executed securely with API key authentication and are restricted to a whitelist of safe commands.
 
 ## Security Architecture
 
-### Mutual Authentication
+### API Key Authentication
 
-The system uses **mutual authentication** to prevent both unauthorized access and server impersonation:
+The system uses **API key authentication** to control access:
 
-1. **Client → Server Authentication**: Client presents API key to prove identity
-2. **Server → Client Authentication**: Commands are signed with HMAC-SHA256, client verifies before execution
+1. **Admin API Key**: Required to send commands from the dashboard
+2. **Client API Key**: Each client has a unique secret key for polling commands
 
 ```
 ┌─────────────────┐                    ┌─────────────────┐
 │  Center Server  │                    │     Client      │
 │                 │                    │                 │
-│ Has: secret_key │                    │ Has: secret_key │
-│      (shared)   │                    │      (shared)   │
+│ Has: client's   │                    │ Has: secret_key │
+│      secret_key │                    │                 │
 └────────┬────────┘                    └────────┬────────┘
          │                                      │
-         │  Command + HMAC(command, secret_key) │
+         │  Client polls with API key           │
+         │◀─────────────────────────────────────│
+         │                                      │
+         │  Return queued command               │
          │─────────────────────────────────────▶│
          │                                      │
-         │                      Verify HMAC ────┤
-         │                      before execute  │
+         │                         Execute ─────┤
          │                                      │
 ```
-
-### Replay Attack Prevention
-
-- **Timestamp validation**: Commands expire after 5 minutes
-- **Nonce tracking**: Each command has a unique nonce; duplicates are rejected
 
 ### Command Whitelist
 
@@ -327,21 +324,17 @@ Edit `command_whitelist.json` to add new commands:
 - Check that `secret_key` is set in `config.json`
 - Check that `remote_commands_enabled` is `true`
 
-### Command rejected with "Invalid signature"
-
-- Ensure the client's `secret_key` matches the one from registration
-- Check that server and client clocks are synchronized (within 5 minutes)
-
-### Command rejected with "Nonce already used"
-
-- This indicates a replay attack was detected
-- If legitimate, wait a few seconds and try again
-
 ### Client shows "Authentication failed"
 
 - Verify `client_id` matches the registered name
 - Verify `secret_key` is correct
 - Check if the client was revoked
+
+### Commands not executing
+
+- Check client logs for errors
+- Verify the command is in the whitelist
+- Check server logs for queue status
 
 ---
 
@@ -356,4 +349,3 @@ The server stores data in these files:
 | `data/pending_commands.json` | Queued commands waiting for clients |
 | `data/command_results.jsonl` | Execution results |
 | `data/command_audit.jsonl` | Audit log of all command activity |
-| `data/used_nonces.json` | Nonces for replay prevention |

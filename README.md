@@ -98,7 +98,7 @@ docker-compose up -d
   - **Monitoring**: Real-time charts and statistics
   - **Remote Commands**: Send commands and view results
   - **Web Shell**: Interactive terminal access to clients
-- **Mutual authentication**: HMAC-SHA256 signed commands
+- **API key authentication**: Admin and client API keys for secure access
 - **Command whitelist**: Only pre-approved commands can be executed
 - **Web Shell**: Real-time terminal access via WebSocket
 - **Audit logging**: All command activity is logged
@@ -107,11 +107,10 @@ docker-compose up -d
 
 ## Security Features
 
-### Mutual Authentication
-- **Client → Server**: API key authentication
-- **Server → Client**: Commands are HMAC-SHA256 signed
-- **Replay protection**: Timestamp + nonce validation
-- **Whitelist-only execution**: Only pre-approved commands run
+### API Key Authentication
+- **Admin API Key**: Required for dashboard access, sending commands, and web shell
+- **Client API Key**: Each client has a unique secret key for polling commands
+- **Whitelist-only execution**: Only pre-approved commands can run
 
 ```
 Admin Dashboard              Center Server                   Client
@@ -119,21 +118,18 @@ Admin Dashboard              Center Server                   Client
      │ 1. Send command            │                            │
      │ (with admin API key)       │                            │
      │───────────────────────────▶│                            │
-     │                            │ 2. Sign command with       │
-     │                            │    client's secret_key     │
      │                            │                            │
      │                            │◀───────────────────────────│
-     │                            │ 3. Client polls            │
-     │                            │    (with API key)          │
+     │                            │ 2. Client polls            │
+     │                            │    (with client API key)   │
      │                            │                            │
-     │                            │ 4. Return signed command   │
+     │                            │ 3. Return command          │
      │                            │───────────────────────────▶│
      │                            │                            │
-     │                            │    5. VERIFY SIGNATURE     │
-     │                            │    before execution!       │
+     │                            │    4. Execute command      │
      │                            │                            │
      │                            │◀───────────────────────────│
-     │                            │ 6. Submit result           │
+     │                            │ 5. Submit result           │
 ```
 
 ## Use Cases

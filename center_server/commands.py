@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional, List
 import os
 
-from auth import sign_command, load_client_secrets
+from auth import load_client_secrets
 
 # Configuration
 DATA_DIR = Path(os.environ.get('DATA_DIR', '/app/data'))
@@ -240,23 +240,21 @@ def queue_command(client_id: str, command_id: str, params: dict, admin_user: str
         'status': 'pending'
     }
 
-    # Sign the command for the target client
-    signed_command = sign_command(command_obj, client_id)
-    if not signed_command:
-        raise ValueError(f"Failed to sign command for client '{client_id}' - client not registered")
+    # Add client_id to command object
+    command_obj['client_id'] = client_id
 
-    # Store in pending queue
+    # Store in pending queue (no signing - simplified auth)
     pending = load_pending_commands()
     if client_id not in pending:
         pending[client_id] = []
 
-    pending[client_id].append(signed_command)
+    pending[client_id].append(command_obj)
     save_pending_commands(pending)
 
     # Audit log
-    log_command_event('queued', signed_command, admin_user)
+    log_command_event('queued', command_obj, admin_user)
 
-    return signed_command
+    return command_obj
 
 
 def get_pending_commands(client_id: str) -> List[dict]:
