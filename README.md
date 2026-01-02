@@ -144,6 +144,24 @@ Admin Dashboard              Center Server                   Client
 4. **Network Quality Analysis**: Track network performance over time
 5. **Remote Diagnostics**: Run system commands on remote clients
 
+## Web Shell Usage
+
+The Web Shell feature allows you to open an interactive terminal session to any connected client directly from the dashboard.
+
+### How to Use Web Shell
+
+1. **Save your Admin API Key**: Go to "Remote Commands" tab, enter your API key, and click "Save Key"
+2. **Open Web Shell tab**: Click the "Web Shell" tab in the dashboard
+3. **Select a client**: Choose an online client from the dropdown
+4. **Connect**: Click "Connect" to start a terminal session
+5. **Use the terminal**: Type commands as you would in SSH
+6. **Disconnect**: Click "Disconnect" or press Ctrl+D to end the session
+
+### Requirements
+- Client must have `web_shell_enabled: true` in config.json
+- Client must be online (green status in dashboard)
+- Valid Admin API Key saved in browser
+
 ## Data Flow
 
 ```

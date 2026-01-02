@@ -1579,6 +1579,16 @@
                 return;
             }
 
+            // Load admin API key from localStorage (same as Remote Commands tab)
+            if (!adminApiKey) {
+                adminApiKey = localStorage.getItem('adminApiKey') || '';
+            }
+
+            if (!adminApiKey) {
+                showToast('Please enter your Admin API Key in the Remote Commands tab first', 'error');
+                return;
+            }
+
             updateShellStatus('connecting', `Connecting to ${clientId}...`);
 
             // Initialize Socket.IO connection
@@ -1647,9 +1657,10 @@
                 });
             }
 
-            // Start shell session
+            // Start shell session (requires admin API key)
             shellSocket.emit('shell_start', {
                 client_id: clientId,
+                api_key: adminApiKey,
                 rows: shellTerminal ? shellTerminal.rows : 24,
                 cols: shellTerminal ? shellTerminal.cols : 80
             });

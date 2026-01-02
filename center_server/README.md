@@ -393,6 +393,17 @@ Data is stored in the `/app/data/` directory:
   - Maximum 3 concurrent sessions per client
   - Use Ctrl+C to interrupt, Ctrl+D to close
 
+#### How to Use Web Shell
+
+1. **Authenticate first**: Go to the "Remote Commands" tab and enter your Admin API Key, then click "Save Key"
+2. **Switch to Web Shell tab**: Click the "Web Shell" tab
+3. **Select a client**: Choose an online client from the dropdown (only online clients are shown)
+4. **Connect**: Click the "Connect" button to start a shell session
+5. **Use the terminal**: Type commands as you would in a normal terminal
+6. **Disconnect**: Click "Disconnect" or use Ctrl+D to close the session
+
+**Note**: The Web Shell uses the same Admin API Key as Remote Commands. You must save your API key in the Remote Commands tab before using Web Shell.
+
 ---
 
 ## Managing the Server
