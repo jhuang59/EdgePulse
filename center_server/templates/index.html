@@ -1518,12 +1518,12 @@
             shellTerminal.open(terminalContainer);
             shellFitAddon.fit();
 
-            // Handle terminal input
+            // Handle terminal input - encode as base64 for binary safety
             shellTerminal.onData(data => {
                 if (shellConnected && shellSocket && shellSessionId) {
                     shellSocket.emit('shell_input', {
                         session_id: shellSessionId,
-                        data: data
+                        input: btoa(data)
                     });
                 }
             });
@@ -1611,8 +1611,8 @@
                     }
                 });
 
-                shellSocket.on('shell_ready', (data) => {
-                    console.log('[Shell] Session ready:', data.session_id);
+                shellSocket.on('shell_connected', (data) => {
+                    console.log('[Shell] Session connected:', data.session_id);
                     shellSessionId = data.session_id;
                     shellConnected = true;
 
@@ -1640,7 +1640,14 @@
 
                 shellSocket.on('shell_output', (data) => {
                     if (data.session_id === shellSessionId && shellTerminal) {
-                        shellTerminal.write(data.data);
+                        // Decode base64 output from client
+                        try {
+                            const decoded = atob(data.output);
+                            shellTerminal.write(decoded);
+                        } catch (e) {
+                            // Fallback to raw if not base64
+                            shellTerminal.write(data.output || '');
+                        }
                     }
                 });
 
