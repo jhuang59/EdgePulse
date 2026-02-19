@@ -281,42 +281,183 @@ docker-compose ps
 
 ---
 
-## Troubleshooting
+## AI Troubleshooting: Ansible + Claude Code
 
-### Container Won't Start
-```bash
-# Check logs for errors
-docker-compose logs
+EdgePulse supports AI-powered troubleshooting using **Ansible** for automated diagnostics and **Claude Code** for intelligent analysis and resolution guidance.
 
-# Verify network interfaces exist
-ip addr show
+### How It Works Together
 
-# Test ping manually
-ping -I eth0 -c 4 8.8.8.8
+1. **Ansible** runs diagnostic playbooks across your EdgePulse nodes, collecting system state, logs, and network data
+2. **Claude Code** analyzes the collected diagnostics and suggests fixes based on the identified issues
+3. You apply the recommended solutions, which can often be automated back through Ansible
+
+```
+EdgePulse Nodes          Ansible Control Node        Claude Code
+     │                          │                         │
+     │  1. Run playbook         │                         │
+     │◀─────────────────────────│                         │
+     │                          │                         │
+     │  2. Collect diagnostics  │                         │
+     │─────────────────────────▶│                         │
+     │                          │ 3. Feed output to       │
+     │                          │    Claude Code          │
+     │                          │────────────────────────▶│
+     │                          │                         │
+     │                          │ 4. AI analysis +        │
+     │                          │    fix recommendations  │
+     │                          │◀────────────────────────│
+     │  5. Apply fixes          │                         │
+     │◀─────────────────────────│                         │
 ```
 
-### Remote Commands Not Working
-```bash
-# Check client logs
-docker-compose logs | grep -i command
+### Prerequisites
 
-# Verify secret_key is set
-cat config.json | jq '.secret_key'
+- Ansible installed on a control node: `pip install ansible`
+- Claude Code installed: `npm install -g @anthropic-ai/claude-code`
+- SSH access from the control node to all EdgePulse nodes
 
-# Verify remote_commands_enabled is true
-cat config.json | jq '.remote_commands_enabled'
+### EdgePulse Diagnostic Playbook
+
+Save this as `edgepulse_diagnose.yml`:
+
+```yaml
+---
+- name: EdgePulse Diagnostic Collection
+  hosts: edgepulse_nodes
+  become: yes
+  tasks:
+    - name: Check container status
+      command: docker-compose ps
+      args:
+        chdir: ~/router-benchmark
+      register: container_status
+      ignore_errors: yes
+
+    - name: Collect recent logs
+      command: docker-compose logs --tail=50
+      args:
+        chdir: ~/router-benchmark
+      register: container_logs
+      ignore_errors: yes
+
+    - name: Check network interfaces
+      command: ip addr show
+      register: network_interfaces
+
+    - name: Test gateway reachability (Router 1)
+      command: ping -c 4 -I eth0 192.168.1.1
+      register: ping_router1
+      ignore_errors: yes
+
+    - name: Test gateway reachability (Router 2)
+      command: ping -c 4 -I eth1 192.168.2.1
+      register: ping_router2
+      ignore_errors: yes
+
+    - name: Check disk space
+      command: df -h /
+      register: disk_space
+
+    - name: Check system memory
+      command: free -h
+      register: memory_info
+
+    - name: Save diagnostics to file
+      copy:
+        content: |
+          === CONTAINER STATUS ===
+          {{ container_status.stdout | default('N/A') }}
+
+          === RECENT LOGS ===
+          {{ container_logs.stdout | default('N/A') }}
+
+          === NETWORK INTERFACES ===
+          {{ network_interfaces.stdout }}
+
+          === PING ROUTER 1 ===
+          {{ ping_router1.stdout | default(ping_router1.stderr | default('N/A')) }}
+
+          === PING ROUTER 2 ===
+          {{ ping_router2.stdout | default(ping_router2.stderr | default('N/A')) }}
+
+          === DISK SPACE ===
+          {{ disk_space.stdout }}
+
+          === MEMORY ===
+          {{ memory_info.stdout }}
+        dest: /tmp/edgepulse_diagnostics_{{ inventory_hostname }}.txt
+      delegate_to: localhost
 ```
 
-### Authentication Errors
-- Verify `client_id` matches the registered name exactly
-- Verify `secret_key` matches the one from registration
-- Check if the client was revoked on the server
-- Ensure server and client clocks are synchronized (within 5 minutes)
+### Run the Diagnostic Playbook
 
-### High Packet Loss on Both Routers
-- Check physical connections
-- Verify internet connectivity: `ping 8.8.8.8`
-- Test if gateway is reachable: `ping -c 4 192.168.1.1`
+```bash
+# Create your inventory file
+cat > inventory.ini << EOF
+[edgepulse_nodes]
+client-1 ansible_host=192.168.1.10 ansible_user=ubuntu
+client-2 ansible_host=192.168.2.10 ansible_user=ubuntu
+EOF
+
+# Run diagnostics
+ansible-playbook -i inventory.ini edgepulse_diagnose.yml
+
+# Diagnostics saved to /tmp/edgepulse_diagnostics_<hostname>.txt
+```
+
+### Analyze with Claude Code
+
+Feed the diagnostic output to Claude Code for AI-powered analysis:
+
+```bash
+# Analyze a single node's diagnostics
+claude "Analyze this EdgePulse diagnostic output and identify issues with recommended fixes:" \
+  < /tmp/edgepulse_diagnostics_client-1.txt
+
+# Or use Claude Code interactively
+claude
+# > Analyze /tmp/edgepulse_diagnostics_client-1.txt and explain what's wrong with my EdgePulse setup
+```
+
+Claude Code will:
+- Identify root causes (e.g., interface misconfiguration, network unreachability, container crashes)
+- Suggest specific fixes with exact commands or config changes
+- Provide an Ansible remediation playbook if multiple nodes are affected
+
+### Example: Ansible Fix Playbook (Claude Code Generated)
+
+After analysis, Claude Code generates a remediation playbook. Example for a common interface misconfiguration:
+
+```yaml
+---
+# Generated by Claude Code based on diagnostic analysis
+- name: Fix EdgePulse network interface configuration
+  hosts: edgepulse_nodes
+  become: yes
+  tasks:
+    - name: Update config.json with correct interface
+      replace:
+        path: ~/router-benchmark/config.json
+        regexp: '"interface": "eth0"'
+        replace: '"interface": "enp3s0"'  # Corrected interface name
+
+    - name: Restart EdgePulse container
+      command: docker-compose restart
+      args:
+        chdir: ~/router-benchmark
+```
+
+### Common Issue Patterns
+
+Claude Code recognizes these EdgePulse-specific patterns:
+
+| Symptom | Likely Cause | AI-Suggested Fix |
+|---------|--------------|------------------|
+| Container exits immediately | Missing or invalid `config.json` | Regenerate config with correct IPs |
+| 100% packet loss on one router | Wrong interface name | Update `interface` in config |
+| Authentication errors | Secret key mismatch | Re-register client on server |
+| No data in dashboard | Server URL unreachable | Check firewall, verify server IP |
+| Clock sync errors | NTP not configured | `sudo systemctl restart ntp` |
 
 ---
 
