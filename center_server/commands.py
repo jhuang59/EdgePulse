@@ -174,11 +174,12 @@ def build_command_string(command_id: str, params: dict) -> Optional[str]:
 
     cmd_template = cmd_info.get('cmd', '')
 
-    # Substitute parameters
-    try:
-        cmd_string = cmd_template.format(**params)
-    except KeyError as e:
-        return None
+    # Substitute parameters using simple string replacement.
+    # Avoids Python's str.format() which consumes {{}} escaping, breaking
+    # Go template syntax (e.g. {{.ID}} in docker --format strings).
+    cmd_string = cmd_template
+    for key, value in params.items():
+        cmd_string = cmd_string.replace('{' + key + '}', str(value))
 
     return cmd_string
 
