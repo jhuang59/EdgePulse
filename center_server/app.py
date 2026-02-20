@@ -31,6 +31,7 @@ DATA_DIR = Path(os.environ.get('DATA_DIR', '/app/data'))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = DATA_DIR / 'benchmark_data.jsonl'
 CLIENTS_FILE = DATA_DIR / 'clients.json'
+COVERAGE_FILE = DATA_DIR / 'coverage_data.jsonl'
 
 # In-memory client registry (last heartbeat times)
 clients_registry = {}
@@ -56,6 +57,46 @@ def save_clients_registry():
     except Exception as e:
         print(f"Error saving clients registry: {e}")
 
+
+def _store_coverage_point(data: dict, location: dict, from_heartbeat: bool = False):
+    """
+    Write a single coverage data point to coverage_data.jsonl.
+    Called from both /api/logs and /api/heartbeat handlers.
+
+    Args:
+        data: The full request payload (benchmark data or heartbeat)
+        location: The location dict from the payload
+        from_heartbeat: True if this came from a heartbeat (no router metrics)
+    """
+    try:
+        r1 = data.get('router1', {}) if not from_heartbeat else {}
+        r2 = data.get('router2', {}) if not from_heartbeat else {}
+
+        point = {
+            'timestamp': data.get('timestamp', datetime.now().isoformat()),
+            'client_id': data.get('client_id', 'unknown'),
+            'lat': location.get('lat'),
+            'lon': location.get('lon'),
+            'altitude': location.get('altitude'),
+            'speed': location.get('speed'),
+            'source': location.get('source', 'unknown'),
+            'from_heartbeat': from_heartbeat,
+            # Router metrics — None for heartbeat-only points
+            'avg_ms_r1': r1.get('avg_ms'),
+            'avg_ms_r2': r2.get('avg_ms'),
+            'loss_r1': r1.get('packet_loss_pct'),
+            'loss_r2': r2.get('packet_loss_pct'),
+            'r1_connected': r1.get('success') if not from_heartbeat else None,
+            'r2_connected': r2.get('success') if not from_heartbeat else None,
+        }
+
+        with open(COVERAGE_FILE, 'a') as f:
+            f.write(json.dumps(point) + '\n')
+
+    except Exception as e:
+        print(f"Warning: failed to store coverage point: {e}")
+
+
 @app.route('/')
 def index():
     """Serve the visualization dashboard"""
@@ -79,6 +120,11 @@ def receive_logs():
         # Append to log file
         with open(LOG_FILE, 'a') as f:
             f.write(json.dumps(data) + '\n')
+
+        # Extract and store coverage data point if location present
+        location = data.get('location')
+        if location and location.get('fix') and location.get('lat') and location.get('lon'):
+            _store_coverage_point(data, location)
 
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Received log from client")
 
@@ -203,6 +249,11 @@ def heartbeat():
         # Save to disk periodically (every heartbeat to keep it simple)
         save_clients_registry()
 
+        # Store coverage point from heartbeat if location present
+        location = data.get('location')
+        if location and location.get('fix') and location.get('lat') and location.get('lon'):
+            _store_coverage_point(data, location, from_heartbeat=True)
+
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Heartbeat from client: {client_id}")
 
         return jsonify({'status': 'success', 'message': 'Heartbeat received'}), 200
@@ -210,6 +261,76 @@ def heartbeat():
     except Exception as e:
         print(f"Error receiving heartbeat: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/coverage', methods=['GET'])
+def get_coverage():
+    """
+    Get coverage/location history with quality data.
+    Query params:
+    - client_id: filter by client (optional, 'all' for all clients)
+    - hours: look back N hours (default 24; 0 = all time)
+    - include_heartbeat: set to '1' to include heartbeat-only points (default: exclude)
+    """
+    try:
+        client_id_filter = request.args.get('client_id', 'all')
+        hours = float(request.args.get('hours', 24))
+        include_heartbeat = request.args.get('include_heartbeat', '0') == '1'
+
+        if not COVERAGE_FILE.exists():
+            return jsonify({'points': [], 'total': 0})
+
+        # Determine cutoff time
+        cutoff = None
+        if hours > 0:
+            cutoff = datetime.now() - timedelta(hours=hours)
+
+        points = []
+        with open(COVERAGE_FILE, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    pt = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                # Filter by client
+                if client_id_filter and client_id_filter != 'all':
+                    if pt.get('client_id') != client_id_filter:
+                        continue
+
+                # Filter heartbeat-only points (default: exclude)
+                if not include_heartbeat and pt.get('from_heartbeat'):
+                    continue
+
+                # Filter by time
+                if cutoff:
+                    try:
+                        ts = datetime.fromisoformat(pt['timestamp'])
+                        if ts < cutoff:
+                            continue
+                    except (KeyError, ValueError):
+                        pass  # Include if timestamp unparseable
+
+                # Validate lat/lon present
+                if pt.get('lat') is None or pt.get('lon') is None:
+                    continue
+
+                points.append(pt)
+
+        return jsonify({
+            'points': points,
+            'total': len(points),
+            'client_id': client_id_filter,
+            'hours': hours
+        })
+
+    except Exception as e:
+        print(f"Error getting coverage: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/clients', methods=['GET'])
 def get_clients():

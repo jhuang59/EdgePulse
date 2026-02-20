@@ -12,6 +12,9 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+    <!-- Leaflet.js for Coverage Map -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         * {
             margin: 0;
@@ -814,6 +817,105 @@
             font-size: 14px;
             margin-top: 10px;
         }
+
+        /* Coverage Map Styles */
+        .coverage-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .coverage-controls {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .coverage-map-wrapper {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        #coverage-map {
+            height: 500px;
+            width: 100%;
+        }
+
+        .coverage-info-panel {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .coverage-info-panel h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 16px;
+        }
+
+        .coverage-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+        }
+
+        .coverage-stat {
+            background: #f9fafb;
+            border-radius: 6px;
+            padding: 12px;
+        }
+
+        .coverage-stat-label {
+            color: #666;
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+
+        .coverage-stat-value {
+            color: #333;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .coverage-legend {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+
+        .coverage-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            color: #666;
+        }
+
+        .coverage-legend-dot {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            border: 2px solid rgba(0,0,0,0.3);
+        }
+
+        .coverage-no-data {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 200px;
+            color: #999;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
@@ -826,6 +928,7 @@
             <button class="tab" onclick="switchTab('commands')">Remote Commands</button>
             <button class="tab" onclick="switchTab('shell')">Web Shell</button>
             <button class="tab" onclick="switchTab('ai')">AI Troubleshoot</button>
+            <button class="tab" onclick="switchTab('coverage')">Coverage Map</button>
         </div>
 
         <!-- Toast Container -->
@@ -1108,6 +1211,67 @@
                 </div>
             </div>
         </div>
+
+        <!-- Coverage Map Tab -->
+        <div id="coverage-tab" class="tab-content">
+            <div class="coverage-container">
+
+                <!-- Controls bar -->
+                <div class="coverage-controls">
+                    <label for="coverageClientFilter"><strong>Client:</strong></label>
+                    <select id="coverageClientFilter">
+                        <option value="all">All Clients</option>
+                    </select>
+
+                    <label for="coverageTimeRange" style="margin-left: 10px;"><strong>Time Range:</strong></label>
+                    <select id="coverageTimeRange">
+                        <option value="0">Live (latest point)</option>
+                        <option value="1">Last 1 hour</option>
+                        <option value="24" selected>Last 24 hours</option>
+                        <option value="168">Last 7 days</option>
+                    </select>
+
+                    <button class="btn btn-primary" onclick="refreshCoverageMap()">Refresh</button>
+                    <button class="btn btn-secondary" onclick="coverageFitBounds()">Fit Map</button>
+
+                    <div class="coverage-legend" style="margin-left: auto; margin-top: 0;">
+                        <span style="font-size: 13px; font-weight: 500; color: #666;">Legend:</span>
+                        <div class="coverage-legend-item">
+                            <div class="coverage-legend-dot" style="background: #10b981;"></div>
+                            <span>Good (&lt;50ms)</span>
+                        </div>
+                        <div class="coverage-legend-item">
+                            <div class="coverage-legend-dot" style="background: #f59e0b;"></div>
+                            <span>OK (50-150ms)</span>
+                        </div>
+                        <div class="coverage-legend-item">
+                            <div class="coverage-legend-dot" style="background: #ef4444;"></div>
+                            <span>Poor/Disconnected</span>
+                        </div>
+                        <div class="coverage-legend-item">
+                            <div class="coverage-legend-dot" style="background: #6b7280;"></div>
+                            <span>No data</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Map -->
+                <div class="coverage-map-wrapper">
+                    <div id="coverage-map"></div>
+                </div>
+
+                <!-- Info panel below map -->
+                <div class="coverage-info-panel">
+                    <h3 id="coverageInfoTitle">Coverage Summary</h3>
+                    <div class="coverage-stats-grid" id="coverageStatsGrid">
+                        <div class="coverage-no-data">
+                            Select a client and time range, then click Refresh to load coverage data.
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
     </div>
 
     <script>
@@ -1144,6 +1308,10 @@
                 loadAdminKey();
                 refreshAIClients();
                 checkAIConfig();
+            } else if (tabName === 'coverage') {
+                initCoverageMap();
+                refreshCoverageMapClients();
+                refreshCoverageMap();
             }
         }
 
@@ -2352,6 +2520,282 @@
                 </div>
                 <div class="ai-result-content">
                     ${html}
+                </div>
+            `;
+        }
+
+        // ========================================
+        // Coverage Map
+        // ========================================
+        let coverageMap = null;
+        let coverageMarkersLayer = null;
+        let coveragePolylineLayer = null;
+        let coverageMapInitialized = false;
+
+        function initCoverageMap() {
+            if (coverageMapInitialized) return;
+
+            // Initialize Leaflet map with default view (will be adjusted when data loads)
+            coverageMap = L.map('coverage-map').setView([37.7749, -122.4194], 12);
+
+            // OpenStreetMap tile layer — free, no API key required
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                maxZoom: 19
+            }).addTo(coverageMap);
+
+            // Create layer groups for markers and polylines
+            coverageMarkersLayer = L.layerGroup().addTo(coverageMap);
+            coveragePolylineLayer = L.layerGroup().addTo(coverageMap);
+
+            coverageMapInitialized = true;
+            console.log('[Coverage] Map initialized');
+        }
+
+        async function refreshCoverageMapClients() {
+            try {
+                const response = await fetch('/api/clients');
+                const result = await response.json();
+
+                const select = document.getElementById('coverageClientFilter');
+                const currentValue = select.value;
+                select.innerHTML = '<option value="all">All Clients</option>';
+
+                if (result.clients) {
+                    result.clients.forEach(client => {
+                        const option = document.createElement('option');
+                        option.value = client.client_id;
+                        const statusIcon = client.status === 'online' ? '🟢' : '🔴';
+                        option.textContent = `${statusIcon} ${client.client_id} (${client.hostname})`;
+                        select.appendChild(option);
+                    });
+                }
+
+                if (currentValue) select.value = currentValue;
+                console.log('[Coverage] Clients refreshed');
+
+            } catch (error) {
+                console.error('[Coverage] Error loading clients:', error);
+            }
+        }
+
+        async function refreshCoverageMap() {
+            if (!coverageMapInitialized) initCoverageMap();
+
+            const clientId = document.getElementById('coverageClientFilter').value;
+            const hours = document.getElementById('coverageTimeRange').value;
+
+            let url = `/api/coverage?hours=${hours}`;
+            if (clientId && clientId !== 'all') {
+                url += `&client_id=${clientId}`;
+            }
+
+            try {
+                const response = await fetch(url);
+                const result = await response.json();
+
+                if (result.error) {
+                    showToast(`Coverage error: ${result.error}`, 'error');
+                    return;
+                }
+
+                renderCoveragePoints(result.points || [], clientId);
+                console.log(`[Coverage] Loaded ${result.total} points`);
+
+            } catch (error) {
+                console.error('[Coverage] Error fetching coverage data:', error);
+                showToast('Failed to load coverage data', 'error');
+            }
+        }
+
+        function getCoverageColor(point) {
+            // Disconnected: either router failed
+            if (point.r1_connected === false && point.r2_connected === false) {
+                return '#ef4444'; // red
+            }
+            if (point.r1_connected === false || point.r2_connected === false) {
+                return '#ef4444'; // red — at least one router failed
+            }
+            // Use best available latency (lower of R1/R2)
+            const latencies = [point.avg_ms_r1, point.avg_ms_r2].filter(v => v !== null && v !== undefined);
+            if (latencies.length === 0) return '#6b7280'; // grey — no data
+
+            const bestLatency = Math.min(...latencies);
+            if (bestLatency < 50) return '#10b981';  // green
+            if (bestLatency < 150) return '#f59e0b'; // yellow
+            return '#ef4444';                         // red
+        }
+
+        function renderCoveragePoints(points, clientId) {
+            // Clear existing layers
+            coverageMarkersLayer.clearLayers();
+            coveragePolylineLayer.clearLayers();
+
+            if (points.length === 0) {
+                updateCoverageInfoPanel([], clientId);
+                return;
+            }
+
+            // Group points by client for multi-client polylines
+            const byClient = {};
+            points.forEach(pt => {
+                const cid = pt.client_id;
+                if (!byClient[cid]) byClient[cid] = [];
+                byClient[cid].push(pt);
+            });
+
+            // Draw polyline trail per client (sorted by timestamp)
+            Object.entries(byClient).forEach(([cid, clientPoints]) => {
+                const sorted = clientPoints.slice().sort(
+                    (a, b) => new Date(a.timestamp) - new Date(b.timestamp)
+                );
+                if (sorted.length >= 2) {
+                    const latlngs = sorted.map(p => [p.lat, p.lon]);
+                    L.polyline(latlngs, {
+                        color: '#3b82f6',
+                        weight: 2,
+                        opacity: 0.6,
+                        dashArray: '5, 5'
+                    }).addTo(coveragePolylineLayer);
+                }
+            });
+
+            // Draw markers for each point
+            const bounds = [];
+            points.forEach((point, idx) => {
+                const color = getCoverageColor(point);
+                const isDisconnect = point.r1_connected === false || point.r2_connected === false;
+
+                // Create circle marker
+                const marker = L.circleMarker([point.lat, point.lon], {
+                    radius: isDisconnect ? 10 : 7,
+                    fillColor: color,
+                    color: isDisconnect ? '#7f1d1d' : 'rgba(0,0,0,0.3)',
+                    weight: isDisconnect ? 2 : 1,
+                    opacity: 1,
+                    fillOpacity: 0.85
+                });
+
+                // Build popup content
+                const ts = new Date(point.timestamp).toLocaleString();
+                const r1ms = point.avg_ms_r1 !== null && point.avg_ms_r1 !== undefined
+                    ? `${point.avg_ms_r1.toFixed(1)} ms` : 'N/A';
+                const r2ms = point.avg_ms_r2 !== null && point.avg_ms_r2 !== undefined
+                    ? `${point.avg_ms_r2.toFixed(1)} ms` : 'N/A';
+                const r1loss = point.loss_r1 !== null && point.loss_r1 !== undefined
+                    ? `${point.loss_r1.toFixed(1)}%` : 'N/A';
+                const r2loss = point.loss_r2 !== null && point.loss_r2 !== undefined
+                    ? `${point.loss_r2.toFixed(1)}%` : 'N/A';
+                const alt = point.altitude !== null && point.altitude !== undefined
+                    ? `${point.altitude.toFixed(1)} m` : 'N/A';
+                const spd = point.speed !== null && point.speed !== undefined
+                    ? `${point.speed.toFixed(1)} km/h` : 'N/A';
+
+                marker.bindPopup(`
+                    <div style="min-width: 200px; font-size: 13px;">
+                        <strong>${point.client_id}</strong><br>
+                        <span style="color: #666;">${ts}</span>
+                        <hr style="margin: 6px 0;">
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <tr><td><strong>Router 1</strong></td><td>${r1ms} / Loss: ${r1loss}</td></tr>
+                            <tr><td><strong>Router 2</strong></td><td>${r2ms} / Loss: ${r2loss}</td></tr>
+                            <tr><td>Altitude</td><td>${alt}</td></tr>
+                            <tr><td>Speed</td><td>${spd}</td></tr>
+                            <tr><td>GPS Source</td><td>${point.source}</td></tr>
+                            <tr><td>Coords</td><td>${point.lat.toFixed(5)}, ${point.lon.toFixed(5)}</td></tr>
+                        </table>
+                        ${isDisconnect ? '<div style="color:#ef4444; font-weight: bold; margin-top: 6px;">Disconnect Event</div>' : ''}
+                    </div>
+                `);
+
+                marker.addTo(coverageMarkersLayer);
+                bounds.push([point.lat, point.lon]);
+            });
+
+            // Fit map to all points
+            if (bounds.length > 0) {
+                try {
+                    coverageMap.fitBounds(bounds, { padding: [30, 30] });
+                } catch (e) {
+                    // Single point — use setView
+                    coverageMap.setView(bounds[0], 14);
+                }
+            }
+
+            updateCoverageInfoPanel(points, clientId);
+        }
+
+        function coverageFitBounds() {
+            // Manually re-fit the map to all visible markers
+            const latlngs = [];
+            coverageMarkersLayer.eachLayer(layer => {
+                if (layer.getLatLng) latlngs.push([layer.getLatLng().lat, layer.getLatLng().lng]);
+            });
+            if (latlngs.length > 0) {
+                coverageMap.fitBounds(latlngs, { padding: [30, 30] });
+            }
+        }
+
+        function updateCoverageInfoPanel(points, clientId) {
+            const title = document.getElementById('coverageInfoTitle');
+            const grid = document.getElementById('coverageStatsGrid');
+
+            const label = (clientId && clientId !== 'all') ? clientId : 'All Clients';
+            title.textContent = `Coverage Summary — ${label} (${points.length} points)`;
+
+            if (points.length === 0) {
+                grid.innerHTML = '<div class="coverage-no-data">No GPS data for this selection.</div>';
+                return;
+            }
+
+            // Compute aggregate stats
+            const r1Latencies = points.map(p => p.avg_ms_r1).filter(v => v !== null && v !== undefined);
+            const r2Latencies = points.map(p => p.avg_ms_r2).filter(v => v !== null && v !== undefined);
+            const disconnects = points.filter(p => p.r1_connected === false || p.r2_connected === false).length;
+
+            const avgR1 = r1Latencies.length > 0
+                ? (r1Latencies.reduce((a, b) => a + b, 0) / r1Latencies.length).toFixed(1)
+                : 'N/A';
+            const avgR2 = r2Latencies.length > 0
+                ? (r2Latencies.reduce((a, b) => a + b, 0) / r2Latencies.length).toFixed(1)
+                : 'N/A';
+
+            const firstTs = new Date(points[0].timestamp).toLocaleString();
+            const lastTs = new Date(points[points.length - 1].timestamp).toLocaleString();
+
+            // Unique clients in view
+            const uniqueClients = new Set(points.map(p => p.client_id)).size;
+
+            grid.innerHTML = `
+                <div class="coverage-stat">
+                    <div class="coverage-stat-label">Total Points</div>
+                    <div class="coverage-stat-value">${points.length}</div>
+                </div>
+                <div class="coverage-stat">
+                    <div class="coverage-stat-label">Clients</div>
+                    <div class="coverage-stat-value">${uniqueClients}</div>
+                </div>
+                <div class="coverage-stat">
+                    <div class="coverage-stat-label">Avg R1 Latency</div>
+                    <div class="coverage-stat-value">${avgR1 !== 'N/A' ? avgR1 + ' ms' : 'N/A'}</div>
+                </div>
+                <div class="coverage-stat">
+                    <div class="coverage-stat-label">Avg R2 Latency</div>
+                    <div class="coverage-stat-value">${avgR2 !== 'N/A' ? avgR2 + ' ms' : 'N/A'}</div>
+                </div>
+                <div class="coverage-stat">
+                    <div class="coverage-stat-label">Disconnect Events</div>
+                    <div class="coverage-stat-value" style="color: ${disconnects > 0 ? '#ef4444' : '#10b981'}">
+                        ${disconnects}
+                    </div>
+                </div>
+                <div class="coverage-stat">
+                    <div class="coverage-stat-label">First Point</div>
+                    <div class="coverage-stat-value" style="font-size: 12px;">${firstTs}</div>
+                </div>
+                <div class="coverage-stat">
+                    <div class="coverage-stat-label">Last Point</div>
+                    <div class="coverage-stat-value" style="font-size: 12px;">${lastTs}</div>
                 </div>
             `;
         }

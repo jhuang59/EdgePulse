@@ -68,9 +68,35 @@ class PingBenchmark:
         self.sio = None
         self.shell_sessions = {}  # session_id -> {'fd': master_fd, 'pid': pid}
 
+        # Geolocation settings
+        geo_config = self.config.get('geolocation', {})
+        geo_source = geo_config.get('source', 'disabled')
+        if geo_source and geo_source != 'disabled':
+            try:
+                from geolocation import GeolocationReader
+                self.geo = GeolocationReader(geo_config)
+            except ImportError as e:
+                print(f"Warning: Could not import geolocation module: {e}")
+                self.geo = None
+        else:
+            self.geo = None
+
         # Create results directory
         os.makedirs(self.results_dir, exist_ok=True)
-    
+
+    def get_location_payload(self):
+        """
+        Get current GPS location for inclusion in payloads.
+        Returns dict with location data or None if unavailable.
+        """
+        if not self.geo:
+            return None
+        try:
+            return self.geo.get_location()
+        except Exception as e:
+            print(f"Warning: Error getting location: {e}")
+            return None
+
     def ping_through_router(self, gateway, interface, name):
         """
         Ping through a specific router using source interface
@@ -191,7 +217,8 @@ class PingBenchmark:
             'client_id': self.client_id,
             'hostname': socket.gethostname(),
             'router1': router1_result,
-            'router2': router2_result
+            'router2': router2_result,
+            'location': self.get_location_payload()
         }
         
         # Print summary
@@ -313,6 +340,7 @@ class PingBenchmark:
                 'hostname': socket.gethostname(),
                 'router1_interface': self.router1_iface,
                 'router2_interface': self.router2_iface,
+                'location': self.get_location_payload(),
             }
             data = json.dumps(heartbeat_data).encode('utf-8')
 
