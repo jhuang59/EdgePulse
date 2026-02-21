@@ -133,14 +133,14 @@
       "timeout": 10
     },
     "docker_ps": {
-      "cmd": "docker ps --format 'table {{.ID}}\\t{{.Image}}\\t{{.Status}}\\t{{.Names}}'",
+      "cmd": "docker ps",
       "description": "List running Docker containers",
       "category": "docker",
       "params": [],
       "timeout": 15
     },
     "docker_stats": {
-      "cmd": "docker stats --no-stream --format 'table {{.Name}}\\t{{.CPUPerc}}\\t{{.MemUsage}}'",
+      "cmd": "docker stats --no-stream",
       "description": "Show Docker container resource usage",
       "category": "docker",
       "params": [],

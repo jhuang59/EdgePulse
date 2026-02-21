@@ -216,9 +216,9 @@ class PingBenchmark:
             print(f"\n{r['router']}:")
             print(f"  Interface: {r['interface']}")
             print(f"  Gateway: {r['gateway']}")
-            print(f"  Packet Loss: {r['packet_loss_pct']:.1f}%")
-            
-            if r['success'] and r.get('avg_ms') is not None:
+            print(f"  Packet Loss: {r.get('packet_loss_pct', 100.0):.1f}%")
+
+            if r.get('success') and r.get('avg_ms') is not None:
                 print(f"  Latency:")
                 print(f"    Min:    {r['min_ms']:.2f} ms")
                 print(f"    Avg:    {r['avg_ms']:.2f} ms")
