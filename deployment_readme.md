@@ -166,7 +166,36 @@ Edit `config.json`:
 - Set `secret_key` to the key from registration
 - Set `remote_commands_enabled` to `true` to allow remote commands
 
-### 7. Deploy the Container
+### 7. Deploy the Client
+
+#### Option A: Native Deployment (Recommended for Web Shell)
+
+Runs directly on the host — Web Shell connects to the actual host system.
+
+```bash
+# Install Python 3.7 and pip (required — Python 3.6 on Ubuntu 18.04 is not compatible)
+sudo apt-get install -y python3.7 python3.7-distutils python3-pip
+
+# Install dependencies
+python3.7 -m pip install requests python-socketio websocket-client
+
+# Set results_dir in config.json to a writable path (not /app/results)
+# e.g. "results_dir": "/home/Downloads/EdgePulse/results"
+
+# Run the client in background (logs saved to /tmp/edgepulse_client.log)
+python3.7 -u /home/Downloads/EdgePulse/ping_benchmark.py > /tmp/edgepulse_client.log 2>&1 &
+
+# Monitor logs
+tail -f /tmp/edgepulse_client.log
+
+# Stop the client
+pkill -f ping_benchmark.py
+```
+
+#### Option B: Docker Deployment
+
+Runs in a container — Web Shell connects to the container environment, not the host.
+
 ```bash
 cd ~/router-benchmark
 docker-compose up -d
@@ -174,7 +203,10 @@ docker-compose up -d
 
 ### 8. Verify Client is Running
 ```bash
-# View logs
+# Option A (native) - view logs
+tail -f /tmp/edgepulse_client.log
+
+# Option B (Docker) - view logs
 docker-compose logs -f
 
 # You should see:
@@ -250,32 +282,62 @@ See [center_server/REMOTE_COMMANDS_README.md](center_server/REMOTE_COMMANDS_READ
 
 ## Management Commands
 
-### Start the Container
+### Native Deployment (Option A)
+
+#### Start the Client
+```bash
+python3.7 -u /home/Downloads/EdgePulse/ping_benchmark.py > /tmp/edgepulse_client.log 2>&1 &
+```
+
+#### Stop the Client
+```bash
+pkill -f ping_benchmark.py
+```
+
+#### Restart the Client
+```bash
+pkill -f ping_benchmark.py && sleep 1 && python3.7 -u /home/Downloads/EdgePulse/ping_benchmark.py > /tmp/edgepulse_client.log 2>&1 &
+```
+
+#### View Real-time Logs
+```bash
+tail -f /tmp/edgepulse_client.log
+```
+
+#### Update Configuration
+1. Edit `config.json`
+2. Restart: `pkill -f ping_benchmark.py && python3.7 -u /home/Downloads/EdgePulse/ping_benchmark.py > /tmp/edgepulse_client.log 2>&1 &`
+
+---
+
+### Docker Deployment (Option B)
+
+#### Start the Container
 ```bash
 docker-compose up -d
 ```
 
-### Stop the Container
+#### Stop the Container
 ```bash
 docker-compose down
 ```
 
-### Restart the Container
+#### Restart the Container
 ```bash
 docker-compose restart
 ```
 
-### View Real-time Logs
+#### View Real-time Logs
 ```bash
 docker-compose logs -f
 ```
 
-### Check Container Status
+#### Check Container Status
 ```bash
 docker-compose ps
 ```
 
-### Update Configuration
+#### Update Configuration
 1. Edit `config.json`
 2. Restart container: `docker-compose restart`
 

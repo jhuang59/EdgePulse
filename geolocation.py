@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 GPS Geolocation Provider for EdgePulse Router Benchmark
 

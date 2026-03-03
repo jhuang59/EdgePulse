@@ -96,12 +96,23 @@ Example response:
 Run the client directly on the host system for full host access via Web Shell:
 
 ```bash
-# Install dependencies
-pip3 install requests python-socketio websocket-client
+# Install pip if not available
+sudo apt-get install -y python3.7 python3.7-distutils python3-pip
 
-# Run the client
-python3 ping_benchmark.py
+# Install dependencies
+python3.7 -m pip install requests python-socketio websocket-client
+
+# Run the client in background (logs saved to /tmp/edgepulse_client.log)
+python3.7 -u /home/Downloads/EdgePulse/ping_benchmark.py > /tmp/edgepulse_client.log 2>&1 &
+
+# Monitor logs
+tail -f /tmp/edgepulse_client.log
+
+# Stop the client
+pkill -f ping_benchmark.py
 ```
+
+> **Note:** Python 3.7+ is required. The default `python3` on Ubuntu 18.04 (Jetson Nano) is 3.6 which is not compatible. Use `python3.7` explicitly.
 
 **Pros:**
 - Web Shell connects directly to host system
