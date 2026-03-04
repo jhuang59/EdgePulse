@@ -80,6 +80,27 @@ Open browser: `http://YOUR_SERVER_IP:5000`
 
 See [center_server/README.md](center_server/README.md) for detailed server documentation.
 
+### 6. Configure Server Environment (Optional)
+
+Add environment variables to `docker-compose.yml` for advanced configuration:
+
+```yaml
+services:
+  center-server:
+    environment:
+      - LOG_MAX_SIZE_MB=100          # Rotate logs at 100MB (default)
+      - LOG_MAX_FILES=10             # Keep 10 rotated files (default)
+      - REQUIRE_HEARTBEAT_AUTH=0     # Set to 1 to require client auth on heartbeats
+```
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LOG_MAX_SIZE_MB` | Rotate log files when they exceed this size | 100 |
+| `LOG_MAX_FILES` | Number of rotated log files to keep | 10 |
+| `REQUIRE_HEARTBEAT_AUTH` | Require client authentication on heartbeats | 0 (disabled) |
+
+**Note:** If `REQUIRE_HEARTBEAT_AUTH=1`, clients must have `secret_key` configured and will send authentication headers with heartbeats.
+
 ---
 
 ## Stage 1: Deploy Benchmark Clients
@@ -166,7 +187,8 @@ Edit `config.json`:
     },
     "sim7600": {
       "serial_port": "/dev/ttyUSB2",
-      "baud_rate": 115200
+      "baud_rate": 115200,
+      "auto_enable": true
     }
   }
 }
@@ -177,6 +199,14 @@ Edit `config.json`:
 - Set `client_id` to match the registered name
 - Set `secret_key` to the key from registration
 - Set `remote_commands_enabled` to `true` to allow remote commands
+
+**Config Validation:**
+The client validates configuration on startup. Invalid configs produce clear error messages:
+```
+ConfigValidationError: Configuration validation failed:
+  - Missing 'router1.gateway' (e.g., '192.168.1.1')
+  - 'test_interval_seconds' must be >= 1 (got: 0)
+```
 
 ### 7. Deploy the Client
 
@@ -251,6 +281,7 @@ docker-compose logs -f
 | `geolocation.ros.topic` | ROS GPS topic (NavSatFix) | /gps/fix |
 | `geolocation.sim7600.serial_port` | Serial port for SIM7600 | /dev/ttyUSB2 |
 | `geolocation.sim7600.baud_rate` | Baud rate for SIM7600 | 115200 |
+| `geolocation.sim7600.auto_enable` | Auto-enable GPS on startup (AT+CGPS=1) | true |
 
 ---
 
@@ -370,7 +401,11 @@ ls -la /dev/ttyUSB*
 # /dev/ttyUSB3 - Modem port
 ```
 
-#### 2. Enable GPS on SIM7600 (first time only)
+#### 2. Enable GPS on SIM7600
+
+**Automatic (recommended):** GPS is auto-enabled when the client starts if `auto_enable: true` (default). The client runs `AT+CGPS=1` automatically.
+
+**Manual (if auto-enable is disabled):**
 
 ```bash
 # Install screen or minicom for serial communication
@@ -419,10 +454,13 @@ AT+CGPSINFO
   "source": "sim7600",
   "sim7600": {
     "serial_port": "/dev/ttyUSB2",
-    "baud_rate": 115200
+    "baud_rate": 115200,
+    "auto_enable": true
   }
 }
 ```
+
+**Note:** `auto_enable: true` (default) automatically runs `AT+CGPS=1` on startup. Set to `false` if GPS is managed externally.
 
 #### 5. Install pyserial (required for SIM7600)
 
@@ -452,17 +490,38 @@ docker-compose logs -f | grep -i geolocation
 ```
 [Geolocation] Initialized with source: ros
 [Geolocation] ROS container: ros_container, topic: /gps/fix
+[Geolocation] Background update thread started
+```
+
+For SIM7600:
+```
+[Geolocation] Initialized with source: sim7600
+[Geolocation] SIM7600 port: /dev/ttyUSB2, baud: 115200
+[Geolocation] SIM7600: GPS enabled successfully
+[Geolocation] Background update thread started
 ```
 
 #### 2. Check Coverage Data on Server
 
 ```bash
-# View recent coverage points
-curl http://YOUR_SERVER_IP:5000/api/coverage?hours=1 | python3 -m json.tool
+# View recent coverage points (first 100)
+curl "http://YOUR_SERVER_IP:5000/api/coverage?hours=1&limit=100" | python3 -m json.tool
+
+# Paginate through large datasets
+curl "http://YOUR_SERVER_IP:5000/api/coverage?hours=24&limit=100&offset=0"   # First 100
+curl "http://YOUR_SERVER_IP:5000/api/coverage?hours=24&limit=100&offset=100" # Next 100
 
 # Check coverage data file directly (on server)
 tail -5 center_server/data/coverage_data.jsonl
 ```
+
+**Pagination parameters:**
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `limit` | Maximum points to return | 1000 (max: 10000) |
+| `offset` | Skip first N matching points | 0 |
+
+Response includes `has_more: true` if more data is available.
 
 #### 3. View Coverage Map
 

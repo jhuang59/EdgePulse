@@ -167,6 +167,9 @@ services:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `DATA_DIR` | Directory for persistent data | `/app/data` |
+| `LOG_MAX_SIZE_MB` | Rotate log files when they exceed this size (MB) | `100` |
+| `LOG_MAX_FILES` | Number of rotated log files to keep | `10` |
+| `REQUIRE_HEARTBEAT_AUTH` | Set to `1` to require client authentication on heartbeats | `0` |
 
 ### Data Files
 
@@ -207,6 +210,7 @@ services:
 | `geolocation.ros.topic` | ROS topic for GPS (NavSatFix) | `/gps/fix` | No |
 | `geolocation.sim7600.serial_port` | Serial port for SIM7600 module | `/dev/ttyUSB2` | No |
 | `geolocation.sim7600.baud_rate` | Baud rate for SIM7600 | `115200` | No |
+| `geolocation.sim7600.auto_enable` | Auto-enable GPS on startup (AT+CGPS=1) | `true` | No |
 
 *Required for remote commands and web shell
 
@@ -245,7 +249,8 @@ services:
     },
     "sim7600": {
       "serial_port": "/dev/ttyUSB2",
-      "baud_rate": 115200
+      "baud_rate": 115200,
+      "auto_enable": true
     }
   }
 }
@@ -436,6 +441,87 @@ Admin Dashboard              Center Server                   Client
 - **Client API Key**: Unique secret for each client
 - **Command Whitelist**: Only pre-approved commands can execute
 - **Audit Logging**: All command activity is logged
+- **Optional Heartbeat Auth**: Enable `REQUIRE_HEARTBEAT_AUTH=1` to prevent client impersonation
+
+---
+
+## Operational Features
+
+### Log Rotation
+
+Data files are automatically rotated to prevent unbounded disk growth:
+
+- `benchmark_data.jsonl` and `coverage_data.jsonl` rotate when they exceed the size limit
+- Rotated files are compressed (`.gz`) and timestamped
+- Old rotated files are automatically cleaned up
+
+**Configuration (environment variables):**
+```bash
+LOG_MAX_SIZE_MB=100    # Rotate when file exceeds 100MB
+LOG_MAX_FILES=10       # Keep 10 rotated files
+```
+
+### Coverage API Pagination
+
+The `/api/coverage` endpoint supports pagination for large datasets:
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `limit` | Maximum points to return | 1000 (max: 10000) |
+| `offset` | Skip first N matching points | 0 |
+
+**Example:**
+```bash
+# Get first 100 points
+curl "http://SERVER:5000/api/coverage?limit=100"
+
+# Get next 100 points
+curl "http://SERVER:5000/api/coverage?limit=100&offset=100"
+```
+
+**Response includes:**
+```json
+{
+  "points": [...],
+  "total": 5000,
+  "returned": 100,
+  "limit": 100,
+  "offset": 0,
+  "has_more": true
+}
+```
+
+### Config Validation
+
+The client validates configuration on startup and provides clear error messages:
+
+- **Required fields**: `router1.gateway`, `router1.interface`, `router2.gateway`, `router2.interface`
+- **Numeric ranges**: Validates intervals are positive numbers
+- **GPS source**: Validates `geolocation.source` is one of `ros`, `sim7600`, or `disabled`
+- **Warnings**: Alerts if `center_server_url` is set without `secret_key`
+
+**Example startup error:**
+```
+ConfigValidationError: Configuration validation failed:
+  - Missing 'router1.gateway' (e.g., '192.168.1.1')
+  - 'ping_count' must be a positive integer (got: 0)
+```
+
+### Non-blocking GPS Reads
+
+GPS location is read in a background thread to prevent heartbeat delays:
+
+- Background thread polls GPS every 3 seconds
+- Cached location returned immediately (no blocking)
+- Cache TTL: 5 seconds
+
+### SIM7600 GPS Auto-Enable
+
+GPS is automatically enabled on SIM7600 module startup:
+
+- Runs `AT+CGPS=1` automatically when `source: "sim7600"`
+- Checks if already enabled first to avoid errors
+- Disable with `"auto_enable": false` in config
 
 ---
 
@@ -504,7 +590,8 @@ Deployed on an enhanced JetBot kit (Jetson Nano + SIM7600G-H 4G/GPS module) to m
     "source": "sim7600",
     "sim7600": {
       "serial_port": "/dev/ttyUSB2",
-      "baud_rate": 115200
+      "baud_rate": 115200,
+      "auto_enable": true
     }
   }
 }
