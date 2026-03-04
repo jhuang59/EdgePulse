@@ -1234,6 +1234,11 @@
                     <button class="btn btn-primary" onclick="refreshCoverageMap()">Refresh</button>
                     <button class="btn btn-secondary" onclick="coverageFitBounds()">Fit Map</button>
 
+                    <label style="margin-left: 15px; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                        <input type="checkbox" id="includeHeartbeat" checked onchange="refreshCoverageMap()">
+                        <span style="font-size: 13px;">Include heartbeat points</span>
+                    </label>
+
                     <div class="coverage-legend" style="margin-left: auto; margin-top: 0;">
                         <span style="font-size: 13px; font-weight: 500; color: #666;">Legend:</span>
                         <div class="coverage-legend-item">
@@ -2584,10 +2589,14 @@
 
             const clientId = document.getElementById('coverageClientFilter').value;
             const hours = document.getElementById('coverageTimeRange').value;
+            const includeHeartbeat = document.getElementById('includeHeartbeat').checked;
 
             let url = `/api/coverage?hours=${hours}`;
             if (clientId && clientId !== 'all') {
                 url += `&client_id=${clientId}`;
+            }
+            if (includeHeartbeat) {
+                url += `&include_heartbeat=1`;
             }
 
             try {
