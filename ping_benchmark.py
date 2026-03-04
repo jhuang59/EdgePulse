@@ -31,11 +31,19 @@ except ImportError:
     SOCKETIO_AVAILABLE = False
     print("Warning: python-socketio not installed, web shell disabled")
 
+class ConfigValidationError(Exception):
+    """Raised when config.json has invalid or missing required fields."""
+    pass
+
+
 class PingBenchmark:
     def __init__(self, config_file='config.json'):
         with open(config_file, 'r') as f:
             self.config = json.load(f)
-        
+
+        # Validate required config fields
+        self._validate_config()
+
         self.router1_gw = self.config['router1']['gateway']
         self.router1_iface = self.config['router1']['interface']
         self.router2_gw = self.config['router2']['gateway']
@@ -75,6 +83,8 @@ class PingBenchmark:
             try:
                 from geolocation import GeolocationReader
                 self.geo = GeolocationReader(geo_config)
+                # Start background GPS updates for non-blocking reads
+                self.geo.start_background_updates()
             except ImportError as e:
                 print(f"Warning: Could not import geolocation module: {e}")
                 self.geo = None
@@ -83,6 +93,63 @@ class PingBenchmark:
 
         # Create results directory
         os.makedirs(self.results_dir, exist_ok=True)
+
+    def _validate_config(self):
+        """
+        Validate configuration and provide clear error messages.
+        Raises ConfigValidationError if required fields are missing or invalid.
+        """
+        errors = []
+
+        # Required router configuration
+        if 'router1' not in self.config:
+            errors.append("Missing 'router1' configuration block")
+        else:
+            if not self.config['router1'].get('gateway'):
+                errors.append("Missing 'router1.gateway' (e.g., '192.168.1.1')")
+            if not self.config['router1'].get('interface'):
+                errors.append("Missing 'router1.interface' (e.g., 'eth0')")
+
+        if 'router2' not in self.config:
+            errors.append("Missing 'router2' configuration block")
+        else:
+            if not self.config['router2'].get('gateway'):
+                errors.append("Missing 'router2.gateway' (e.g., '192.168.2.1')")
+            if not self.config['router2'].get('interface'):
+                errors.append("Missing 'router2.interface' (e.g., 'eth1')")
+
+        # Validate numeric ranges
+        ping_count = self.config.get('ping_count', 20)
+        if not isinstance(ping_count, int) or ping_count < 1:
+            errors.append(f"'ping_count' must be a positive integer (got: {ping_count})")
+
+        test_interval = self.config.get('test_interval_seconds', 300)
+        if not isinstance(test_interval, (int, float)) or test_interval < 1:
+            errors.append(f"'test_interval_seconds' must be >= 1 (got: {test_interval})")
+
+        heartbeat_interval = self.config.get('heartbeat_interval_seconds', 60)
+        if not isinstance(heartbeat_interval, (int, float)) or heartbeat_interval < 1:
+            errors.append(f"'heartbeat_interval_seconds' must be >= 1 (got: {heartbeat_interval})")
+
+        command_poll = self.config.get('command_poll_interval_seconds', 10)
+        if not isinstance(command_poll, (int, float)) or command_poll < 1:
+            errors.append(f"'command_poll_interval_seconds' must be >= 1 (got: {command_poll})")
+
+        # Validate geolocation source if specified
+        geo_config = self.config.get('geolocation', {})
+        geo_source = geo_config.get('source', 'disabled')
+        valid_geo_sources = ('disabled', 'ros', 'sim7600')
+        if geo_source not in valid_geo_sources:
+            errors.append(f"'geolocation.source' must be one of {valid_geo_sources} (got: '{geo_source}')")
+
+        # Warn about authentication
+        if self.config.get('center_server_url') and not self.config.get('secret_key'):
+            print("Warning: 'center_server_url' is set but 'secret_key' is empty. "
+                  "Remote commands will be disabled.")
+
+        if errors:
+            error_msg = "Configuration validation failed:\n  - " + "\n  - ".join(errors)
+            raise ConfigValidationError(error_msg)
 
     def get_location_payload(self):
         """
@@ -344,10 +411,16 @@ class PingBenchmark:
             }
             data = json.dumps(heartbeat_data).encode('utf-8')
 
+            # Build headers with optional authentication
+            headers = {'Content-Type': 'application/json'}
+            if self.secret_key:
+                headers['X-Client-ID'] = self.client_id
+                headers['X-Client-API-Key'] = self.secret_key
+
             req = urllib.request.Request(
                 url,
                 data=data,
-                headers={'Content-Type': 'application/json'},
+                headers=headers,
                 method='POST'
             )
 
@@ -355,6 +428,11 @@ class PingBenchmark:
                 if response.status == 200:
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] Heartbeat sent to center server")
 
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                print(f"Warning: Heartbeat auth failed - check secret_key configuration")
+            else:
+                print(f"Warning: Heartbeat failed (HTTP {e.code}): {e.reason}")
         except Exception as e:
             print(f"Warning: Heartbeat failed: {e}")
 

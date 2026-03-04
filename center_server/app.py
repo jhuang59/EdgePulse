@@ -19,6 +19,7 @@ import auth
 import commands
 from shell_manager import shell_manager
 from ai_diagnostics import get_troubleshooter, configure_troubleshooter
+from log_rotation import LogRotator, get_rotator
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'router-benchmark-secret-key')
@@ -32,6 +33,14 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = DATA_DIR / 'benchmark_data.jsonl'
 CLIENTS_FILE = DATA_DIR / 'clients.json'
 COVERAGE_FILE = DATA_DIR / 'coverage_data.jsonl'
+
+# Log rotation settings (configurable via environment)
+LOG_MAX_SIZE_MB = int(os.environ.get('LOG_MAX_SIZE_MB', 100))
+LOG_MAX_FILES = int(os.environ.get('LOG_MAX_FILES', 10))
+
+# Initialize log rotators
+benchmark_rotator = get_rotator(LOG_FILE, max_size_mb=LOG_MAX_SIZE_MB, max_files=LOG_MAX_FILES)
+coverage_rotator = get_rotator(COVERAGE_FILE, max_size_mb=LOG_MAX_SIZE_MB, max_files=LOG_MAX_FILES)
 
 # In-memory client registry (last heartbeat times)
 clients_registry = {}
@@ -90,8 +99,8 @@ def _store_coverage_point(data: dict, location: dict, from_heartbeat: bool = Fal
             'r2_connected': r2.get('success') if not from_heartbeat else None,
         }
 
-        with open(COVERAGE_FILE, 'a') as f:
-            f.write(json.dumps(point) + '\n')
+        # Use log rotation to prevent unbounded file growth
+        coverage_rotator.write_with_rotation(json.dumps(point))
 
     except Exception as e:
         print(f"Warning: failed to store coverage point: {e}")
@@ -117,9 +126,8 @@ def receive_logs():
         # Add server reception timestamp
         data['server_received_at'] = datetime.now().isoformat()
 
-        # Append to log file
-        with open(LOG_FILE, 'a') as f:
-            f.write(json.dumps(data) + '\n')
+        # Append to log file with rotation
+        benchmark_rotator.write_with_rotation(json.dumps(data))
 
         # Extract and store coverage data point if location present
         location = data.get('location')
@@ -223,11 +231,19 @@ def health():
     """Health check endpoint"""
     return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
 
+# Optional heartbeat authentication (set REQUIRE_HEARTBEAT_AUTH=1 to enable)
+REQUIRE_HEARTBEAT_AUTH = os.environ.get('REQUIRE_HEARTBEAT_AUTH', '0') == '1'
+
+
 @app.route('/api/heartbeat', methods=['POST'])
 def heartbeat():
     """
     Receive heartbeat from clients
     Expected format: {client_id: "...", hostname: "...", ...}
+
+    Optional authentication (enabled via REQUIRE_HEARTBEAT_AUTH=1):
+    - X-Client-ID header must match client_id in body
+    - X-Client-API-Key header must match registered client secret
     """
     try:
         data = request.get_json()
@@ -236,6 +252,18 @@ def heartbeat():
             return jsonify({'error': 'client_id is required'}), 400
 
         client_id = data['client_id']
+
+        # Optional authentication to prevent client impersonation
+        if REQUIRE_HEARTBEAT_AUTH:
+            header_client_id = request.headers.get('X-Client-ID')
+            api_key = request.headers.get('X-Client-API-Key')
+
+            if not header_client_id or header_client_id != client_id:
+                return jsonify({'error': 'X-Client-ID header must match client_id in body'}), 401
+
+            is_valid, error_msg = auth.authenticate_client_request(client_id, api_key)
+            if not is_valid:
+                return jsonify({'error': error_msg}), 401
 
         # Update client registry
         clients_registry[client_id] = {
@@ -271,14 +299,18 @@ def get_coverage():
     - client_id: filter by client (optional, 'all' for all clients)
     - hours: look back N hours (default 24; 0 = all time)
     - include_heartbeat: set to '1' to include heartbeat-only points (default: exclude)
+    - limit: max points to return (default 1000, max 10000)
+    - offset: skip first N matching points for pagination (default 0)
     """
     try:
         client_id_filter = request.args.get('client_id', 'all')
         hours = float(request.args.get('hours', 24))
         include_heartbeat = request.args.get('include_heartbeat', '0') == '1'
+        limit = min(int(request.args.get('limit', 1000)), 10000)  # Cap at 10000
+        offset = max(int(request.args.get('offset', 0)), 0)
 
         if not COVERAGE_FILE.exists():
-            return jsonify({'points': [], 'total': 0})
+            return jsonify({'points': [], 'total': 0, 'limit': limit, 'offset': offset})
 
         # Determine cutoff time
         cutoff = None
@@ -286,6 +318,7 @@ def get_coverage():
             cutoff = datetime.now() - timedelta(hours=hours)
 
         points = []
+        total_matching = 0
         with open(COVERAGE_FILE, 'r') as f:
             for line in f:
                 line = line.strip()
@@ -318,11 +351,22 @@ def get_coverage():
                 if pt.get('lat') is None or pt.get('lon') is None:
                     continue
 
-                points.append(pt)
+                # Count total matching points
+                total_matching += 1
+
+                # Apply pagination: skip offset, then collect up to limit
+                if total_matching <= offset:
+                    continue
+                if len(points) < limit:
+                    points.append(pt)
 
         return jsonify({
             'points': points,
-            'total': len(points),
+            'total': total_matching,
+            'returned': len(points),
+            'limit': limit,
+            'offset': offset,
+            'has_more': total_matching > offset + len(points),
             'client_id': client_id_filter,
             'hours': hours
         })

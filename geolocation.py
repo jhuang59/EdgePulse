@@ -17,7 +17,8 @@ Configure via config.json:
     },
     "sim7600": {
       "serial_port": "/dev/ttyUSB2",
-      "baud_rate": 115200
+      "baud_rate": 115200,
+      "auto_enable": true  // automatically enable GPS on startup
     }
   }
 }
@@ -25,7 +26,14 @@ Configure via config.json:
 
 import subprocess
 import re
+import threading
+import time
 from datetime import datetime
+from typing import Optional
+
+# Cache settings
+GPS_CACHE_TTL_SECONDS = 5  # Return cached location if less than 5 seconds old
+GPS_UPDATE_INTERVAL = 3    # Background thread update interval
 
 
 class GeolocationReader:
@@ -55,27 +63,123 @@ class GeolocationReader:
         # SIM7600 configuration
         self.sim_port = config.get('sim7600', {}).get('serial_port', '/dev/ttyUSB2')
         self.sim_baud = config.get('sim7600', {}).get('baud_rate', 115200)
+        self.sim_auto_enable = config.get('sim7600', {}).get('auto_enable', True)
+
+        # Cached location (non-blocking reads)
+        self._cached_location: Optional[dict] = None
+        self._cache_timestamp: float = 0
+        self._cache_lock = threading.Lock()
+
+        # Background update thread
+        self._running = False
+        self._update_thread: Optional[threading.Thread] = None
 
         print(f"[Geolocation] Initialized with source: {self.source}")
         if self.source == 'ros':
             print(f"[Geolocation] ROS container: {self.ros_container}, topic: {self.ros_topic}")
         elif self.source == 'sim7600':
             print(f"[Geolocation] SIM7600 port: {self.sim_port}, baud: {self.sim_baud}")
+            # Auto-enable GPS if configured
+            if self.sim_auto_enable:
+                self._enable_sim7600_gps()
 
-    def get_location(self) -> dict | None:
-        """
-        Get current GPS location from the configured source.
+    def start_background_updates(self):
+        """Start background thread for non-blocking GPS updates."""
+        if self._running:
+            return
+        self._running = True
+        self._update_thread = threading.Thread(target=self._background_worker, daemon=True)
+        self._update_thread.start()
+        print("[Geolocation] Background update thread started")
 
-        Returns:
-            dict with keys: lat, lon, altitude, speed, source, fix
-            None if no valid fix or on error
-        """
+    def stop_background_updates(self):
+        """Stop the background update thread."""
+        self._running = False
+        if self._update_thread:
+            self._update_thread.join(timeout=2)
+            self._update_thread = None
+
+    def _background_worker(self):
+        """Background worker that periodically updates GPS cache."""
+        while self._running:
+            try:
+                location = self._read_location_blocking()
+                with self._cache_lock:
+                    self._cached_location = location
+                    self._cache_timestamp = time.time()
+            except Exception as e:
+                print(f"[Geolocation] Background update error: {e}")
+            time.sleep(GPS_UPDATE_INTERVAL)
+
+    def _read_location_blocking(self) -> dict | None:
+        """Internal blocking read (used by background thread)."""
         if self.source == 'ros':
             return self._read_ros()
         elif self.source == 'sim7600':
             return self._read_sim7600()
         else:
             return None
+
+    def get_location(self) -> dict | None:
+        """
+        Get current GPS location (non-blocking if background thread is running).
+
+        If background updates are running, returns cached location immediately.
+        Otherwise, performs a blocking read.
+
+        Returns:
+            dict with keys: lat, lon, altitude, speed, source, fix
+            None if no valid fix or on error
+        """
+        # If background thread is running, return cached value
+        if self._running:
+            with self._cache_lock:
+                # Return cache if fresh enough
+                if self._cached_location and (time.time() - self._cache_timestamp) < GPS_CACHE_TTL_SECONDS:
+                    return self._cached_location.copy()
+                # Cache is stale but return it anyway (non-blocking behavior)
+                if self._cached_location:
+                    return self._cached_location.copy()
+                return None
+
+        # No background thread - fall back to blocking read
+        return self._read_location_blocking()
+
+    def _enable_sim7600_gps(self):
+        """Enable GPS on SIM7600 module (AT+CGPS=1)."""
+        try:
+            import serial
+        except ImportError:
+            print("[Geolocation] SIM7600: pyserial not installed, skipping auto-enable")
+            return
+
+        try:
+            with serial.Serial(self.sim_port, self.sim_baud, timeout=3) as ser:
+                ser.reset_input_buffer()
+
+                # First check if GPS is already enabled
+                ser.write(b'AT+CGPS?\r\n')
+                time.sleep(0.5)
+                response = ser.read(256).decode('utf-8', errors='ignore')
+
+                if '+CGPS: 1' in response:
+                    print("[Geolocation] SIM7600: GPS already enabled")
+                    return
+
+                # Enable GPS
+                ser.write(b'AT+CGPS=1\r\n')
+                time.sleep(1)
+                response = ser.read(256).decode('utf-8', errors='ignore')
+
+                if 'OK' in response:
+                    print("[Geolocation] SIM7600: GPS enabled successfully")
+                elif 'ERROR' in response:
+                    print("[Geolocation] SIM7600: Failed to enable GPS")
+                else:
+                    print(f"[Geolocation] SIM7600: Unexpected response: {response.strip()}")
+
+        except Exception as e:
+            print(f"[Geolocation] SIM7600: Error enabling GPS: {e}")
 
     def _read_ros(self) -> dict | None:
         """
