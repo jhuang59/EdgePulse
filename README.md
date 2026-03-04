@@ -179,6 +179,7 @@ services:
 | `data/pending_commands.json` | Queued commands |
 | `data/command_results.jsonl` | Command execution results |
 | `data/command_audit.jsonl` | Audit log |
+| `data/coverage_data.jsonl` | GPS location + connection quality data |
 
 ---
 
@@ -201,6 +202,11 @@ services:
 | `remote_commands_enabled` | Enable remote commands | `true` | No |
 | `command_poll_interval_seconds` | Command poll interval | `10` | No |
 | `web_shell_enabled` | Enable web shell access | `true` | No |
+| `geolocation.source` | GPS source: `ros`, `sim7600`, or `disabled` | `disabled` | No |
+| `geolocation.ros.container_name` | Docker container running ROS | `ros_container` | No |
+| `geolocation.ros.topic` | ROS topic for GPS (NavSatFix) | `/gps/fix` | No |
+| `geolocation.sim7600.serial_port` | Serial port for SIM7600 module | `/dev/ttyUSB2` | No |
+| `geolocation.sim7600.baud_rate` | Baud rate for SIM7600 | `115200` | No |
 
 *Required for remote commands and web shell
 
@@ -230,7 +236,18 @@ services:
   "secret_key": "your-secret-key-here",
   "remote_commands_enabled": true,
   "command_poll_interval_seconds": 10,
-  "web_shell_enabled": true
+  "web_shell_enabled": true,
+  "geolocation": {
+    "source": "ros",
+    "ros": {
+      "container_name": "ros_container",
+      "topic": "/gps/fix"
+    },
+    "sim7600": {
+      "serial_port": "/dev/ttyUSB2",
+      "baud_rate": 115200
+    }
+  }
 }
 ```
 
@@ -319,6 +336,39 @@ AI-powered diagnostics to automatically analyze edge device health:
 - Actionable Recommendations
 - Ready-to-run fix commands
 
+### Tab 5: Coverage Map
+
+Visualize GPS location data with connection quality for mobile hosts:
+
+1. **Configure GPS Source** (in client's config.json):
+   - Set `geolocation.source` to `ros` or `sim7600`
+   - Configure the appropriate source block (container name/topic for ROS, serial port for SIM7600)
+
+2. **View Coverage Map**:
+   - Select a client or "All Clients" from the dropdown
+   - Choose time range: Live, 1 hour, 24 hours, or 7 days
+   - Toggle "Include heartbeat points" for higher resolution (60s vs 5min intervals)
+   - Click "Refresh" to load data
+
+3. **Map Features**:
+   - **Color-coded markers**: Green (<50ms), Yellow (50-150ms), Red (>150ms or disconnected)
+   - **Polyline trails**: Dashed lines showing host movement paths
+   - **Click markers**: View detailed popup with latency, packet loss, altitude, speed, GPS source
+   - **Disconnect events**: Highlighted with red pins and "Disconnect Event" badge
+
+4. **Summary Panel**:
+   - Total GPS points collected
+   - Number of unique clients
+   - Average R1/R2 latency
+   - Disconnect event count
+   - First/last timestamp
+
+**GPS Data Intervals:**
+| Source | Interval | Includes Router Metrics |
+|--------|----------|------------------------|
+| Heartbeat | 60 seconds | No (location only) |
+| Benchmark | 300 seconds | Yes (latency, packet loss) |
+
 ---
 
 ## Architecture
@@ -350,6 +400,7 @@ AI-powered diagnostics to automatically analyze edge device health:
                     │  • Remote Commands      │
                     │  • Web Shell            │
                     │  • AI Troubleshoot      │
+                    │  • Coverage Map         │
                     └─────────────────────────┘
 ```
 
@@ -436,9 +487,9 @@ This is expected behavior when using Docker deployment. To access the host syste
 
 ## Example Deployment: JetBot
 
-Deployed on an enhanced JetBot kit (Jetson Nano + SIM7600G-H 4G/GPS module) to monitor robot health metrics remotely over cellular networks.
+Deployed on an enhanced JetBot kit (Jetson Nano + SIM7600G-H 4G/GPS module) to monitor robot health metrics remotely over cellular networks with GPS tracking.
 
-**config.json for JetBot:**
+**config.json for JetBot with SIM7600 GPS:**
 ```json
 {
   "router1": { "gateway": "192.168.55.1", "interface": "usb0" },
@@ -448,7 +499,35 @@ Deployed on an enhanced JetBot kit (Jetson Nano + SIM7600G-H 4G/GPS module) to m
   "client_id": "jetbot-01",
   "secret_key": "your-secret-key",
   "remote_commands_enabled": true,
-  "web_shell_enabled": true
+  "web_shell_enabled": true,
+  "geolocation": {
+    "source": "sim7600",
+    "sim7600": {
+      "serial_port": "/dev/ttyUSB2",
+      "baud_rate": 115200
+    }
+  }
+}
+```
+
+**config.json for JetBot with ROS GPS:**
+```json
+{
+  "router1": { "gateway": "192.168.55.1", "interface": "usb0" },
+  "router2": { "gateway": "192.168.1.1", "interface": "wlan0" },
+  "ping_target": "8.8.8.8",
+  "center_server_url": "http://your-server.com:5000",
+  "client_id": "jetbot-01",
+  "secret_key": "your-secret-key",
+  "remote_commands_enabled": true,
+  "web_shell_enabled": true,
+  "geolocation": {
+    "source": "ros",
+    "ros": {
+      "container_name": "ros_container",
+      "topic": "/gps/fix"
+    }
+  }
 }
 ```
 
