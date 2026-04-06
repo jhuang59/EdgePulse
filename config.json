@@ -17,5 +17,16 @@
   "secret_key": "261ac0a95c07d64c399ada342f304b46ac2676b71534b6e860b527c9692f601a",
   "remote_commands_enabled": true,
   "command_poll_interval_seconds": 10,
-  "web_shell_enabled": true
+  "web_shell_enabled": true,
+  "geolocation": {
+    "source": "ros",
+    "ros": {
+      "container_name": "ros_container",
+      "topic": "/gps/fix"
+    },
+    "sim7600": {
+      "serial_port": "/dev/ttyUSB2",
+      "baud_rate": 115200
+    }
+  }
 }

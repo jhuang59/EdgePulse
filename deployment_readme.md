@@ -80,6 +80,27 @@ Open browser: `http://YOUR_SERVER_IP:5000`
 
 See [center_server/README.md](center_server/README.md) for detailed server documentation.
 
+### 6. Configure Server Environment (Optional)
+
+Add environment variables to `docker-compose.yml` for advanced configuration:
+
+```yaml
+services:
+  center-server:
+    environment:
+      - LOG_MAX_SIZE_MB=100          # Rotate logs at 100MB (default)
+      - LOG_MAX_FILES=10             # Keep 10 rotated files (default)
+      - REQUIRE_HEARTBEAT_AUTH=0     # Set to 1 to require client auth on heartbeats
+```
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LOG_MAX_SIZE_MB` | Rotate log files when they exceed this size | 100 |
+| `LOG_MAX_FILES` | Number of rotated log files to keep | 10 |
+| `REQUIRE_HEARTBEAT_AUTH` | Require client authentication on heartbeats | 0 (disabled) |
+
+**Note:** If `REQUIRE_HEARTBEAT_AUTH=1`, clients must have `secret_key` configured and will send authentication headers with heartbeats.
+
 ---
 
 ## Stage 1: Deploy Benchmark Clients
@@ -156,7 +177,20 @@ Edit `config.json`:
   "client_id": "office-client-1",
   "secret_key": "YOUR_SECRET_KEY_FROM_REGISTRATION",
   "remote_commands_enabled": true,
-  "command_poll_interval_seconds": 10
+  "command_poll_interval_seconds": 10,
+  "web_shell_enabled": true,
+  "geolocation": {
+    "source": "disabled",
+    "ros": {
+      "container_name": "ros_container",
+      "topic": "/gps/fix"
+    },
+    "sim7600": {
+      "serial_port": "/dev/ttyUSB2",
+      "baud_rate": 115200,
+      "auto_enable": true
+    }
+  }
 }
 ```
 
@@ -166,7 +200,44 @@ Edit `config.json`:
 - Set `secret_key` to the key from registration
 - Set `remote_commands_enabled` to `true` to allow remote commands
 
-### 7. Deploy the Container
+**Config Validation:**
+The client validates configuration on startup. Invalid configs produce clear error messages:
+```
+ConfigValidationError: Configuration validation failed:
+  - Missing 'router1.gateway' (e.g., '192.168.1.1')
+  - 'test_interval_seconds' must be >= 1 (got: 0)
+```
+
+### 7. Deploy the Client
+
+#### Option A: Native Deployment (Recommended for Web Shell)
+
+Runs directly on the host — Web Shell connects to the actual host system.
+
+```bash
+# Install Python 3.7 and pip (required — Python 3.6 on Ubuntu 18.04 is not compatible)
+sudo apt-get install -y python3.7 python3.7-distutils python3-pip
+
+# Install dependencies
+python3.7 -m pip install requests python-socketio websocket-client
+
+# Set results_dir in config.json to a writable path (not /app/results)
+# e.g. "results_dir": "/home/Downloads/EdgePulse/results"
+
+# Run the client in background (logs saved to /tmp/edgepulse_client.log)
+python3.7 -u /home/Downloads/EdgePulse/ping_benchmark.py > /tmp/edgepulse_client.log 2>&1 &
+
+# Monitor logs
+tail -f /tmp/edgepulse_client.log
+
+# Stop the client
+pkill -f ping_benchmark.py
+```
+
+#### Option B: Docker Deployment
+
+Runs in a container — Web Shell connects to the container environment, not the host.
+
 ```bash
 cd ~/router-benchmark
 docker-compose up -d
@@ -174,7 +245,10 @@ docker-compose up -d
 
 ### 8. Verify Client is Running
 ```bash
-# View logs
+# Option A (native) - view logs
+tail -f /tmp/edgepulse_client.log
+
+# Option B (Docker) - view logs
 docker-compose logs -f
 
 # You should see:
@@ -201,6 +275,13 @@ docker-compose logs -f
 | `secret_key` | Shared secret for auth | (required for commands) |
 | `remote_commands_enabled` | Enable remote commands | true |
 | `command_poll_interval_seconds` | Command poll interval | 10 |
+| `web_shell_enabled` | Enable web shell access | true |
+| `geolocation.source` | GPS source: `ros`, `sim7600`, or `disabled` | disabled |
+| `geolocation.ros.container_name` | Docker container running ROS | ros_container |
+| `geolocation.ros.topic` | ROS GPS topic (NavSatFix) | /gps/fix |
+| `geolocation.sim7600.serial_port` | Serial port for SIM7600 | /dev/ttyUSB2 |
+| `geolocation.sim7600.baud_rate` | Baud rate for SIM7600 | 115200 |
+| `geolocation.sim7600.auto_enable` | Auto-enable GPS on startup (AT+CGPS=1) | true |
 
 ---
 
@@ -248,34 +329,285 @@ See [center_server/REMOTE_COMMANDS_README.md](center_server/REMOTE_COMMANDS_READ
 
 ---
 
+## GPS Module Setup (for Coverage Map)
+
+EdgePulse supports GPS tracking to visualize where mobile hosts experience connectivity issues. Two GPS sources are supported:
+
+### Option 1: ROS GPS (sensor_msgs/NavSatFix)
+
+If your robot runs ROS inside a Docker container with a GPS node publishing to a topic:
+
+#### 1. Verify ROS GPS Output
+
+```bash
+# Check if ROS container is running
+docker ps | grep ros
+
+# List available topics
+docker exec ros_container rostopic list | grep -i gps
+
+# View GPS data (run for a few seconds, then Ctrl+C)
+docker exec ros_container rostopic echo -n 1 /gps/fix
+```
+
+**Expected output:**
+```yaml
+header:
+  seq: 12345
+  stamp:
+    secs: 1708456789
+    nsecs: 123456789
+  frame_id: "gps"
+status:
+  status: 0
+  service: 1
+latitude: 35.6812
+longitude: 139.7671
+altitude: 45.2
+position_covariance: [...]
+position_covariance_type: 0
+```
+
+#### 2. Enable ROS GPS in config.json
+
+```json
+"geolocation": {
+  "source": "ros",
+  "ros": {
+    "container_name": "ros_container",
+    "topic": "/gps/fix"
+  }
+}
+```
+
+**Note:** The client must run **natively on the host** (not in Docker) to use `docker exec` to read from the ROS container.
+
+---
+
+### Option 2: SIM7600G-H 4G/GNSS Module
+
+If your Jetson has a SIM7600G-H module connected via USB:
+
+#### 1. Identify the Serial Port
+
+```bash
+# List USB serial devices
+ls -la /dev/ttyUSB*
+
+# Common SIM7600 ports:
+# /dev/ttyUSB0 - Diagnostic port
+# /dev/ttyUSB1 - NMEA GPS output
+# /dev/ttyUSB2 - AT command port (use this one)
+# /dev/ttyUSB3 - Modem port
+```
+
+#### 2. Enable GPS on SIM7600
+
+**Automatic (recommended):** GPS is auto-enabled when the client starts if `auto_enable: true` (default). The client runs `AT+CGPS=1` automatically.
+
+**Manual (if auto-enable is disabled):**
+
+```bash
+# Install screen or minicom for serial communication
+sudo apt-get install screen
+
+# Connect to AT command port
+sudo screen /dev/ttyUSB2 115200
+
+# Enable GPS (type these commands, press Enter after each):
+AT+CGPS=1
+
+# Check GPS status
+AT+CGPS?
+
+# Response should be: +CGPS: 1,1
+
+# Exit screen: Ctrl+A, then K, then Y
+```
+
+#### 3. Verify GPS Output
+
+```bash
+# Test GPS info (requires GPS fix - may take 30-60 seconds outdoors)
+sudo screen /dev/ttyUSB2 115200
+
+# Query GPS position
+AT+CGPSINFO
+
+# Expected response (with fix):
+# +CGPSINFO: 3568.1234,N,13976.5678,E,210224,123456.0,45.2,0.5,0
+
+# Format: lat,N/S,lon,E/W,date,time,altitude,speed,course
+
+# No fix response:
+# +CGPSINFO: ,,,,,,,,
+
+# Exit screen: Ctrl+A, then K, then Y
+```
+
+**Tip:** GPS requires clear sky view. Cold start can take 30-60 seconds. Move outdoors for first fix.
+
+#### 4. Enable SIM7600 GPS in config.json
+
+```json
+"geolocation": {
+  "source": "sim7600",
+  "sim7600": {
+    "serial_port": "/dev/ttyUSB2",
+    "baud_rate": 115200,
+    "auto_enable": true
+  }
+}
+```
+
+**Note:** `auto_enable: true` (default) automatically runs `AT+CGPS=1` on startup. Set to `false` if GPS is managed externally.
+
+#### 5. Install pyserial (required for SIM7600)
+
+```bash
+pip3 install pyserial
+# or
+python3.7 -m pip install pyserial
+```
+
+---
+
+### Verifying GPS Data Flow
+
+After configuring GPS and restarting the client:
+
+#### 1. Check Client Logs
+
+```bash
+# Native deployment
+tail -f /tmp/edgepulse_client.log | grep -i geolocation
+
+# Docker deployment
+docker-compose logs -f | grep -i geolocation
+```
+
+**Expected log messages:**
+```
+[Geolocation] Initialized with source: ros
+[Geolocation] ROS container: ros_container, topic: /gps/fix
+[Geolocation] Background update thread started
+```
+
+For SIM7600:
+```
+[Geolocation] Initialized with source: sim7600
+[Geolocation] SIM7600 port: /dev/ttyUSB2, baud: 115200
+[Geolocation] SIM7600: GPS enabled successfully
+[Geolocation] Background update thread started
+```
+
+#### 2. Check Coverage Data on Server
+
+```bash
+# View recent coverage points (first 100)
+curl "http://YOUR_SERVER_IP:5000/api/coverage?hours=1&limit=100" | python3 -m json.tool
+
+# Paginate through large datasets
+curl "http://YOUR_SERVER_IP:5000/api/coverage?hours=24&limit=100&offset=0"   # First 100
+curl "http://YOUR_SERVER_IP:5000/api/coverage?hours=24&limit=100&offset=100" # Next 100
+
+# Check coverage data file directly (on server)
+tail -5 center_server/data/coverage_data.jsonl
+```
+
+**Pagination parameters:**
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `limit` | Maximum points to return | 1000 (max: 10000) |
+| `offset` | Skip first N matching points | 0 |
+
+Response includes `has_more: true` if more data is available.
+
+#### 3. View Coverage Map
+
+1. Open dashboard: `http://YOUR_SERVER_IP:5000`
+2. Click **Coverage Map** tab
+3. Select your client from dropdown
+4. Click **Refresh**
+5. Map should show GPS points with color-coded markers
+
+---
+
+### GPS Data Update Frequency
+
+| Event | Interval | GPS Included |
+|-------|----------|--------------|
+| Heartbeat | 60 seconds | Yes |
+| Benchmark | 300 seconds (5 min) | Yes |
+
+To increase GPS resolution, reduce `heartbeat_interval_seconds` in config.json:
+
+```json
+"heartbeat_interval_seconds": 10
+```
+
+**Note:** More frequent heartbeats increase network usage but provide finer GPS tracking.
+
+---
+
 ## Management Commands
 
-### Start the Container
+### Native Deployment (Option A)
+
+#### Start the Client
+```bash
+python3.7 -u /home/Downloads/EdgePulse/ping_benchmark.py > /tmp/edgepulse_client.log 2>&1 &
+```
+
+#### Stop the Client
+```bash
+pkill -f ping_benchmark.py
+```
+
+#### Restart the Client
+```bash
+pkill -f ping_benchmark.py && sleep 1 && python3.7 -u /home/Downloads/EdgePulse/ping_benchmark.py > /tmp/edgepulse_client.log 2>&1 &
+```
+
+#### View Real-time Logs
+```bash
+tail -f /tmp/edgepulse_client.log
+```
+
+#### Update Configuration
+1. Edit `config.json`
+2. Restart: `pkill -f ping_benchmark.py && python3.7 -u /home/Downloads/EdgePulse/ping_benchmark.py > /tmp/edgepulse_client.log 2>&1 &`
+
+---
+
+### Docker Deployment (Option B)
+
+#### Start the Container
 ```bash
 docker-compose up -d
 ```
 
-### Stop the Container
+#### Stop the Container
 ```bash
 docker-compose down
 ```
 
-### Restart the Container
+#### Restart the Container
 ```bash
 docker-compose restart
 ```
 
-### View Real-time Logs
+#### View Real-time Logs
 ```bash
 docker-compose logs -f
 ```
 
-### Check Container Status
+#### Check Container Status
 ```bash
 docker-compose ps
 ```
 
-### Update Configuration
+#### Update Configuration
 1. Edit `config.json`
 2. Restart container: `docker-compose restart`
 
@@ -312,6 +644,62 @@ cat config.json | jq '.remote_commands_enabled'
 - Verify `secret_key` matches the one from registration
 - Check if the client was revoked on the server
 - Ensure server and client clocks are synchronized (within 5 minutes)
+
+### GPS Not Working
+
+#### ROS GPS Issues
+```bash
+# Check if ROS container is running
+docker ps | grep ros
+
+# Check if topic exists
+docker exec ros_container rostopic list | grep gps
+
+# Test reading from topic (should return data within 10 seconds)
+timeout 10 docker exec ros_container rostopic echo -n 1 /gps/fix
+
+# If timeout: ROS GPS node may not be publishing
+# Check ROS node status
+docker exec ros_container rosnode list
+docker exec ros_container rosnode info /gps_node
+```
+
+#### SIM7600 GPS Issues
+```bash
+# Check if serial port exists
+ls -la /dev/ttyUSB*
+
+# Check if port is accessible (no permission denied)
+sudo screen /dev/ttyUSB2 115200
+# Type: AT
+# Should respond: OK
+# Exit: Ctrl+A, K, Y
+
+# If permission denied, add user to dialout group:
+sudo usermod -aG dialout $USER
+# Log out and back in
+
+# Check if GPS is enabled
+# In screen session, type:
+AT+CGPS?
+# Should respond: +CGPS: 1,1
+
+# If +CGPS: 0,1 - GPS is disabled, enable it:
+AT+CGPS=1
+
+# No GPS fix (returns empty +CGPSINFO: ,,,,,,,,)
+# - Move device outdoors with clear sky view
+# - Wait 30-60 seconds for cold start fix
+# - Check antenna connection
+```
+
+#### GPS Data Not Appearing in Coverage Map
+1. Verify `geolocation.source` is set correctly in config.json (not `disabled`)
+2. Restart the client after config change
+3. Check client logs for `[Geolocation]` messages
+4. Wait for at least one heartbeat (60s) or benchmark (300s) cycle
+5. Click **Refresh** on Coverage Map tab
+6. Check API directly: `curl http://SERVER:5000/api/coverage?hours=1`
 
 ### High Packet Loss on Both Routers
 - Check physical connections

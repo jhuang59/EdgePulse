@@ -7,6 +7,7 @@ Handles command whitelist, queuing, and result storage
 import json
 import uuid
 import re
+import fcntl
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
@@ -174,38 +175,86 @@ def build_command_string(command_id: str, params: dict) -> Optional[str]:
 
     cmd_template = cmd_info.get('cmd', '')
 
-    # Substitute parameters
-    try:
-        cmd_string = cmd_template.format(**params)
-    except KeyError as e:
-        return None
+    # Substitute parameters using simple string replacement.
+    # Avoids Python's str.format() which consumes {{}} escaping, breaking
+    # Go template syntax (e.g. {{.ID}} in docker --format strings).
+    cmd_string = cmd_template
+    for key, value in params.items():
+        cmd_string = cmd_string.replace('{' + key + '}', str(value))
 
     return cmd_string
 
 
 # ============================================================================
-# Pending Commands Queue
+# Pending Commands Queue (with file locking to prevent race conditions)
 # ============================================================================
 
+PENDING_COMMANDS_LOCK = DATA_DIR / 'pending_commands.lock'
+
+
 def load_pending_commands() -> dict:
-    """Load pending commands from file"""
-    if PENDING_COMMANDS_FILE.exists():
-        try:
-            with open(PENDING_COMMANDS_FILE, 'r') as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
+    """Load pending commands from file with shared lock"""
+    if not PENDING_COMMANDS_FILE.exists():
+        return {}
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(PENDING_COMMANDS_LOCK, 'w') as lock_fd:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_SH)
+            try:
+                with open(PENDING_COMMANDS_FILE, 'r') as f:
+                    return json.load(f)
+            finally:
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        return {}
 
 
 def save_pending_commands(commands: dict) -> None:
-    """Save pending commands to file"""
+    """Save pending commands to file with exclusive lock"""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        with open(PENDING_COMMANDS_FILE, 'w') as f:
-            json.dump(commands, f, indent=2)
+        with open(PENDING_COMMANDS_LOCK, 'w') as lock_fd:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+            try:
+                with open(PENDING_COMMANDS_FILE, 'w') as f:
+                    json.dump(commands, f, indent=2)
+            finally:
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
     except Exception as e:
         print(f"Error saving pending commands: {e}")
+
+
+def atomic_update_pending_commands(update_fn) -> dict:
+    """
+    Atomically read, update, and write pending commands.
+    Prevents race conditions when multiple requests modify commands.
+    update_fn receives current commands dict and should return updated dict.
+    """
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(PENDING_COMMANDS_LOCK, 'w') as lock_fd:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+            try:
+                # Read current
+                if PENDING_COMMANDS_FILE.exists():
+                    with open(PENDING_COMMANDS_FILE, 'r') as f:
+                        commands = json.load(f)
+                else:
+                    commands = {}
+
+                # Apply update
+                updated = update_fn(commands)
+
+                # Write back
+                with open(PENDING_COMMANDS_FILE, 'w') as f:
+                    json.dump(updated, f, indent=2)
+
+                return updated
+            finally:
+                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+    except Exception as e:
+        print(f"Error in atomic update: {e}")
+        raise
 
 
 def queue_command(client_id: str, command_id: str, params: dict, admin_user: str) -> Optional[dict]:
@@ -243,13 +292,14 @@ def queue_command(client_id: str, command_id: str, params: dict, admin_user: str
     # Add client_id to command object
     command_obj['client_id'] = client_id
 
-    # Store in pending queue (no signing - simplified auth)
-    pending = load_pending_commands()
-    if client_id not in pending:
-        pending[client_id] = []
+    # Store in pending queue atomically to prevent race conditions
+    def add_command(pending):
+        if client_id not in pending:
+            pending[client_id] = []
+        pending[client_id].append(command_obj)
+        return pending
 
-    pending[client_id].append(command_obj)
-    save_pending_commands(pending)
+    atomic_update_pending_commands(add_command)
 
     # Audit log
     log_command_event('queued', command_obj, admin_user)
@@ -264,30 +314,32 @@ def get_pending_commands(client_id: str) -> List[dict]:
 
 
 def pop_pending_command(client_id: str) -> Optional[dict]:
-    """Get and remove the oldest pending command for a client"""
-    pending = load_pending_commands()
+    """Get and remove the oldest pending command for a client (atomic)"""
+    popped_command = [None]  # Use list to capture in closure
 
-    if client_id not in pending or not pending[client_id]:
-        return None
+    def pop_first(pending):
+        if client_id not in pending or not pending[client_id]:
+            return pending
+        popped_command[0] = pending[client_id].pop(0)
+        return pending
 
-    command = pending[client_id].pop(0)
-    save_pending_commands(pending)
-
-    return command
+    atomic_update_pending_commands(pop_first)
+    return popped_command[0]
 
 
 def clear_pending_commands(client_id: str) -> int:
-    """Clear all pending commands for a client, returns count cleared"""
-    pending = load_pending_commands()
+    """Clear all pending commands for a client (atomic), returns count cleared"""
+    cleared_count = [0]  # Use list to capture in closure
 
-    if client_id not in pending:
-        return 0
+    def clear_client(pending):
+        if client_id not in pending:
+            return pending
+        cleared_count[0] = len(pending[client_id])
+        del pending[client_id]
+        return pending
 
-    count = len(pending[client_id])
-    del pending[client_id]
-    save_pending_commands(pending)
-
-    return count
+    atomic_update_pending_commands(clear_client)
+    return cleared_count[0]
 
 
 # ============================================================================
